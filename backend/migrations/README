@@ -1,0 +1,5 @@
+Alembic migrations for Stundenplan.
+
+Use:
+- Initialize DB: `alembic upgrade head`
+- Create new revision: `alembic revision -m "message"`

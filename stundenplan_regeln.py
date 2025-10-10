@@ -1,8 +1,10 @@
 # stundenplan_regeln.py
+import math
+
 from ortools.sat.python import cp_model
 
 
-def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln):
+def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln, room_plan=None):
     """
     Baut alle Constraints und (falls aktiv) Soft-Objectives auf.
 
@@ -57,6 +59,57 @@ def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln):
                 belegte = [plan[(fid, tag, std)] for fid in FACH_ID if str(df.loc[fid, 'Klasse']) == str(klasse)]
                 if belegte:
                     model.Add(sum(belegte) <= 1)
+
+    # -------- 2b) Räume: Auslastung und Verfügbarkeit --------
+    room_assignments = {}
+    if "RoomID" in df.columns:
+        def _normalize_room_id(value):
+            if value is None:
+                return None
+            if isinstance(value, (int,)):
+                return int(value)
+            if isinstance(value, float):
+                if math.isnan(value):
+                    return None
+                return int(value)
+            try:
+                return int(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        for fid in FACH_ID:
+            rid = _normalize_room_id(df.loc[fid, "RoomID"])
+            if rid is not None:
+                room_assignments[fid] = rid
+
+    def _room_slot_allowed(rid, tag, std):
+        if not room_plan:
+            return True
+        cfg = room_plan.get(rid)
+        if not cfg:
+            return True
+        slots = cfg.get(tag)
+        if not slots:
+            return True
+        if std >= len(slots):
+            return True
+        return bool(slots[std])
+
+    if room_assignments:
+        grouped = {}
+        for fid, rid in room_assignments.items():
+            grouped.setdefault(rid, []).append(fid)
+        for rid, fids in grouped.items():
+            for tag in TAGE:
+                for std in range(8):
+                    vars_at_slot = [plan[(fid, tag, std)] for fid in fids]
+                    if vars_at_slot:
+                        model.Add(sum(vars_at_slot) <= 1)
+        for fid, rid in room_assignments.items():
+            for tag in TAGE:
+                for std in range(8):
+                    if not _room_slot_allowed(rid, tag, std):
+                        model.Add(plan[(fid, tag, std)] == 0)
 
     # -------- 3) Tagesbegrenzung (Mo–Do max. 6, Fr max. 5) --------
     if regeln.get("stundenbegrenzung", True):

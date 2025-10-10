@@ -1,0 +1,28 @@
+/* Basislayout */
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  margin: 0;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.view-placeholder {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.view-placeholder h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+
+.view-placeholder p {
+  color: #64748b;
+}
