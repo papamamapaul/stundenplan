@@ -4,6 +4,7 @@ const NAVIGATION = [
     items: [
       { label: 'Dashboard', hash: '#/plan' },
       { label: 'Basisplan', hash: '#/basisplan' },
+      { label: 'Stundenverteilung', hash: '#/stundenverteilung' },
     ],
   },
   {

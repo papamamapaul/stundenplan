@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import Class, Subject, Teacher, Room
+from ..models import Class, Subject, Teacher, Room, Requirement, PlanSlot, ClassSubject
 
 
 router = APIRouter(prefix="", tags=["masterdata"])
@@ -96,6 +96,19 @@ def delete_teacher(teacher_id: int, session: Session = Depends(get_session)) -> 
     t = session.get(Teacher, teacher_id)
     if not t:
         raise HTTPException(status_code=404, detail="teacher not found")
+    dependencies = []
+    has_homeroom = session.exec(select(Class.id).where(Class.homeroom_teacher_id == teacher_id).limit(1)).first()
+    if has_homeroom:
+        dependencies.append("Klassen (Klassenleitung)")
+    has_requirements = session.exec(select(Requirement.id).where(Requirement.teacher_id == teacher_id).limit(1)).first()
+    if has_requirements:
+        dependencies.append("Zuordnungen (Requirements)")
+    has_plan_slots = session.exec(select(PlanSlot.id).where(PlanSlot.teacher_id == teacher_id).limit(1)).first()
+    if has_plan_slots:
+        dependencies.append("Plan-Slots")
+    if dependencies:
+        detail = "Lehrkraft kann nicht gelöscht werden. Bitte entferne zuerst abhängige Einträge: " + "; ".join(dependencies)
+        raise HTTPException(status_code=400, detail=detail)
     session.delete(t)
     session.commit()
     return {"ok": True}
@@ -137,6 +150,19 @@ def delete_class(class_id: int, session: Session = Depends(get_session)) -> dict
     c = session.get(Class, class_id)
     if not c:
         raise HTTPException(status_code=404, detail="class not found")
+    dependencies = []
+    has_requirements = session.exec(select(Requirement.id).where(Requirement.class_id == class_id).limit(1)).first()
+    if has_requirements:
+        dependencies.append("Zuordnungen (Requirements)")
+    has_curriculum = session.exec(select(ClassSubject.id).where(ClassSubject.class_id == class_id).limit(1)).first()
+    if has_curriculum:
+        dependencies.append("Stundentafel")
+    has_plan_slots = session.exec(select(PlanSlot.id).where(PlanSlot.class_id == class_id).limit(1)).first()
+    if has_plan_slots:
+        dependencies.append("Plan-Slots")
+    if dependencies:
+        detail = "Klasse kann nicht gelöscht werden. Bitte entferne zuerst abhängige Einträge: " + "; ".join(dependencies)
+        raise HTTPException(status_code=400, detail=detail)
     session.delete(c)
     session.commit()
     return {"ok": True}

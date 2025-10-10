@@ -1,8 +1,9 @@
-import { fetchTeachers, updateTeacher, createTeacher } from '../api/teachers.js';
-import { fetchClasses, createClass, updateClass } from '../api/classes.js';
+import { fetchTeachers, updateTeacher, createTeacher, deleteTeacher } from '../api/teachers.js';
+import { fetchClasses, createClass, updateClass, deleteClass } from '../api/classes.js';
 import { fetchRooms, createRoom, updateRoom, deleteRoom } from '../api/rooms.js';
 import { fetchSubjects } from '../api/subjects.js';
 import { fetchCurriculum, createCurriculum, updateCurriculum, deleteCurriculum } from '../api/curriculum.js';
+import { confirmModal, formatError } from '../utils/ui.js';
 
 export function createDataMaintenanceView() {
   const container = document.createElement('section');
@@ -85,7 +86,7 @@ function createTeachersSection() {
       setStatus(`${data.length} Lehrkräfte geladen.`);
       setTimeout(clearStatus, 2000);
     } catch (err) {
-      setStatus(`Fehler beim Laden: ${err.message || err}`, true);
+      setStatus(`Fehler beim Laden: ${formatError(err)}`, true);
     }
   }
 
@@ -104,7 +105,7 @@ function createTeachersSection() {
         teacherCheckboxCell(teacher, 'work_mi', setStatus, clearStatus),
         teacherCheckboxCell(teacher, 'work_do', setStatus, clearStatus),
         teacherCheckboxCell(teacher, 'work_fr', setStatus, clearStatus),
-        document.createElement('td')
+        teacherActionCell(teacher, loadTeachers, setStatus, clearStatus)
       );
       table.tbody.appendChild(tr);
     });
@@ -136,7 +137,7 @@ function teacherInputCell(teacher, field, setStatus, clearStatus, type = 'text')
       setStatus('Gespeichert.');
       setTimeout(clearStatus, 1500);
     } catch (err) {
-      setStatus(`Fehler: ${err.message || err}`, true);
+      setStatus(`Fehler: ${formatError(err)}`, true);
     }
   });
   td.appendChild(input);
@@ -157,13 +158,41 @@ function teacherCheckboxCell(teacher, field, setStatus, clearStatus) {
       setStatus('Gespeichert.');
       setTimeout(clearStatus, 1500);
     } catch (err) {
-      setStatus(`Fehler: ${err.message || err}`, true);
+      setStatus(`Fehler: ${formatError(err)}`, true);
     }
   });
   const label = document.createElement('label');
   label.className = 'label justify-center cursor-pointer';
   label.appendChild(checkbox);
   td.appendChild(label);
+  return td;
+}
+
+function teacherActionCell(teacher, reload, setStatus, clearStatus) {
+  const td = document.createElement('td');
+  td.className = 'text-right';
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost btn-sm text-error';
+  btn.textContent = 'Löschen';
+  btn.addEventListener('click', async () => {
+    const teacherLabel = buildTeacherName(teacher) || teacher.kuerzel || `#${teacher.id}`;
+    const confirmed = await confirmModal({
+      title: 'Lehrkraft löschen',
+      message: `Lehrkraft "${teacherLabel}" wirklich löschen?`,
+      confirmText: 'Löschen',
+    });
+    if (!confirmed) return;
+    setStatus('Lösche Lehrkraft…');
+    try {
+      await deleteTeacher(teacher.id);
+      await reload();
+      setStatus('Lehrkraft gelöscht.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+    }
+  });
+  td.appendChild(btn);
   return td;
 }
 
@@ -232,7 +261,7 @@ function newTeacherRow(onRefresh, setStatus, clearStatus) {
       setStatus('Lehrkraft angelegt.');
       setTimeout(clearStatus, 1500);
     } catch (err) {
-      setStatus(`Fehler: ${err.message || err}`, true);
+      setStatus(`Fehler: ${formatError(err)}`, true);
     } finally {
       addBtn.disabled = false;
     }
@@ -278,7 +307,7 @@ function createClassesSection() {
       setStatus(`${state.classes.length} Klassen geladen.`);
       setTimeout(clearStatus, 2000);
     } catch (err) {
-      setStatus(`Fehler beim Laden: ${err.message || err}`, true);
+      setStatus(`Fehler beim Laden: ${formatError(err)}`, true);
     }
   }
 
@@ -313,7 +342,7 @@ function createClassesSection() {
           setStatus('Gespeichert.');
           setTimeout(clearStatus, 1500);
         } catch (err) {
-          setStatus(`Fehler: ${err.message || err}`, true);
+          setStatus(`Fehler: ${formatError(err)}`, true);
         }
       });
       nameCell.appendChild(nameInput);
@@ -332,13 +361,13 @@ function createClassesSection() {
           setStatus('Gespeichert.');
           setTimeout(clearStatus, 1500);
         } catch (err) {
-          setStatus(`Fehler: ${err.message || err}`, true);
+          setStatus(`Fehler: ${formatError(err)}`, true);
         }
       });
       teacherCell.appendChild(select);
       tr.appendChild(teacherCell);
 
-      tr.appendChild(document.createElement('td'));
+      tr.appendChild(classActionCell(cls, loadClasses, setStatus, clearStatus));
       table.tbody.appendChild(tr);
     });
 
@@ -347,6 +376,33 @@ function createClassesSection() {
 
   loadClasses();
   return { element: wrap };
+}
+
+function classActionCell(cls, reload, setStatus, clearStatus) {
+  const td = document.createElement('td');
+  td.className = 'text-right';
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost btn-sm text-error';
+  btn.textContent = 'Löschen';
+  btn.addEventListener('click', async () => {
+    const confirmed = await confirmModal({
+      title: 'Klasse löschen',
+      message: `Klasse "${cls.name}" wirklich löschen?`,
+      confirmText: 'Löschen',
+    });
+    if (!confirmed) return;
+    setStatus('Lösche Klasse…');
+    try {
+      await deleteClass(cls.id);
+      await reload();
+      setStatus('Klasse gelöscht.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+    }
+  });
+  td.appendChild(btn);
+  return td;
 }
 
 function newClassRow(onRefresh, setStatus, clearStatus, teacherOptions) {
@@ -392,9 +448,298 @@ function newClassRow(onRefresh, setStatus, clearStatus, teacherOptions) {
       setStatus('Klasse angelegt.');
       setTimeout(clearStatus, 1500);
     } catch (err) {
-      setStatus(`Fehler: ${err.message || err}`, true);
+      setStatus(`Fehler: ${formatError(err)}`, true);
     } finally {
       addBtn.disabled = false;
+    }
+  });
+  actionCell.appendChild(addBtn);
+  tr.appendChild(actionCell);
+
+  function updateButtonState() {
+    addBtn.disabled = !(draft.name && draft.name.length >= 1);
+  }
+
+  return tr;
+}
+
+// --- Räume ---
+function createRoomsSection() {
+  const wrap = document.createElement('div');
+  wrap.className = 'space-y-3';
+
+  const status = createStatusBar();
+  wrap.appendChild(status.element);
+
+  const table = createTable(['Name*', 'Typ', 'Kapazität', 'Klassenraum', 'Aktion']);
+  wrap.appendChild(table.wrapper);
+
+  const state = { rooms: [] };
+  const setStatus = status.set;
+  const clearStatus = status.clear;
+
+  async function loadRooms() {
+    setStatus('Lade Räume…');
+    try {
+      const rooms = await fetchRooms();
+      state.rooms = rooms.sort((a, b) => a.name.localeCompare(b.name));
+      renderRows();
+      setStatus(`${state.rooms.length} Räume geladen.`);
+      setTimeout(clearStatus, 2000);
+    } catch (err) {
+      setStatus(`Fehler beim Laden: ${formatError(err)}`, true);
+    }
+  }
+
+  function renderRows() {
+    table.tbody.innerHTML = '';
+    state.rooms.forEach(room => {
+      const tr = document.createElement('tr');
+      tr.appendChild(roomNameCell(room, setStatus, clearStatus, renderRows));
+      tr.appendChild(roomTypeCell(room, setStatus, clearStatus));
+      tr.appendChild(roomCapacityCell(room, setStatus, clearStatus));
+      tr.appendChild(roomClassroomCell(room, setStatus, clearStatus));
+      tr.appendChild(roomActionCell(room, setStatus, clearStatus, loadRooms));
+      table.tbody.appendChild(tr);
+    });
+
+    table.tbody.appendChild(newRoomRow(loadRooms, setStatus, clearStatus));
+  }
+
+  loadRooms();
+  return { element: wrap };
+}
+
+function roomNameCell(room, setStatus, clearStatus, rerender) {
+  const td = document.createElement('td');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'input input-bordered input-sm w-full';
+  input.value = room.name || '';
+  input.addEventListener('blur', async () => {
+    const newName = input.value.trim();
+    if (!newName || newName === room.name) return;
+    setStatus('Speichere…');
+    try {
+      const updated = await updateRoom(room.id, { name: newName });
+      Object.assign(room, updated);
+      rerender();
+      setStatus('Gespeichert.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+      input.value = room.name || '';
+    }
+  });
+  td.appendChild(input);
+  return td;
+}
+
+function roomTypeCell(room, setStatus, clearStatus) {
+  const td = document.createElement('td');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'input input-bordered input-sm w-full';
+  input.value = room.type || '';
+  input.placeholder = 'z. B. Fachraum';
+  input.addEventListener('blur', async () => {
+    const newType = input.value.trim();
+    if ((room.type || '') === newType) return;
+    setStatus('Speichere…');
+    try {
+      const updated = await updateRoom(room.id, { type: newType });
+      Object.assign(room, updated);
+      setStatus('Gespeichert.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+      input.value = room.type || '';
+    }
+  });
+  td.appendChild(input);
+  return td;
+}
+
+function roomCapacityCell(room, setStatus, clearStatus) {
+  const td = document.createElement('td');
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.className = 'input input-bordered input-sm w-24';
+  input.value = room.capacity ?? '';
+  input.placeholder = '0';
+  input.addEventListener('blur', async () => {
+    const raw = input.value.trim();
+    if (raw === '') {
+      if (room.capacity == null) return;
+      input.value = room.capacity ?? '';
+      return;
+    }
+    const newValue = Number(raw);
+    if (Number.isNaN(newValue) || newValue < 0) {
+      input.value = room.capacity ?? '';
+      return;
+    }
+    if (room.capacity === newValue) return;
+    setStatus('Speichere…');
+    try {
+      const updated = await updateRoom(room.id, { capacity: newValue });
+      Object.assign(room, updated);
+      setStatus('Gespeichert.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+      input.value = room.capacity ?? '';
+    }
+  });
+  td.appendChild(input);
+  return td;
+}
+
+function roomClassroomCell(room, setStatus, clearStatus) {
+  const td = document.createElement('td');
+  const label = document.createElement('label');
+  label.className = 'label justify-center cursor-pointer';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'checkbox checkbox-sm';
+  checkbox.checked = !!room.is_classroom;
+  checkbox.addEventListener('change', async () => {
+    setStatus('Speichere…');
+    try {
+      const updated = await updateRoom(room.id, { is_classroom: checkbox.checked });
+      Object.assign(room, updated);
+      setStatus('Gespeichert.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+      checkbox.checked = !!room.is_classroom;
+    }
+  });
+  label.appendChild(checkbox);
+  td.appendChild(label);
+  return td;
+}
+
+function roomActionCell(room, setStatus, clearStatus, reload) {
+  const td = document.createElement('td');
+  td.className = 'text-right';
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost btn-sm text-error';
+  btn.textContent = 'Löschen';
+  btn.addEventListener('click', async () => {
+    const confirmed = await confirmModal({
+      title: 'Raum löschen',
+      message: `Raum "${room.name}" wirklich löschen?`,
+      confirmText: 'Löschen',
+    });
+    if (!confirmed) return;
+    setStatus('Lösche Raum…');
+    try {
+      await deleteRoom(room.id);
+      await reload();
+      setStatus('Raum gelöscht.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+    }
+  });
+  td.appendChild(btn);
+  return td;
+}
+
+function newRoomRow(onRefresh, setStatus, clearStatus) {
+  const tr = document.createElement('tr');
+  tr.className = 'bg-base-200/60';
+
+  const draft = {
+    name: '',
+    type: '',
+    capacity: '',
+    is_classroom: false,
+  };
+
+  const nameCell = document.createElement('td');
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'input input-bordered input-sm w-full';
+  nameInput.placeholder = 'Raumname*';
+  nameInput.addEventListener('input', () => {
+    draft.name = nameInput.value.trim();
+    updateButtonState();
+  });
+  nameCell.appendChild(nameInput);
+  tr.appendChild(nameCell);
+
+  const typeCell = document.createElement('td');
+  const typeInput = document.createElement('input');
+  typeInput.type = 'text';
+  typeInput.className = 'input input-bordered input-sm w-full';
+  typeInput.placeholder = 'Typ';
+  typeInput.addEventListener('input', () => {
+    draft.type = typeInput.value.trim();
+  });
+  typeCell.appendChild(typeInput);
+  tr.appendChild(typeCell);
+
+  const capacityCell = document.createElement('td');
+  const capacityInput = document.createElement('input');
+  capacityInput.type = 'number';
+  capacityInput.min = '0';
+  capacityInput.className = 'input input-bordered input-sm w-24';
+  capacityInput.placeholder = '0';
+  capacityInput.addEventListener('input', () => {
+    draft.capacity = capacityInput.value;
+  });
+  capacityCell.appendChild(capacityInput);
+  tr.appendChild(capacityCell);
+
+  const classroomCell = document.createElement('td');
+  const label = document.createElement('label');
+  label.className = 'label justify-center cursor-pointer';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'checkbox checkbox-sm';
+  checkbox.addEventListener('change', () => {
+    draft.is_classroom = checkbox.checked;
+  });
+  label.appendChild(checkbox);
+  classroomCell.appendChild(label);
+  tr.appendChild(classroomCell);
+
+  const actionCell = document.createElement('td');
+  actionCell.className = 'text-right';
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn btn-primary btn-sm';
+  addBtn.textContent = 'Anlegen';
+  addBtn.disabled = true;
+  addBtn.addEventListener('click', async () => {
+    addBtn.disabled = true;
+    setStatus('Raum wird angelegt…');
+    try {
+      const payload = {
+        name: draft.name,
+        type: draft.type || null,
+        capacity: draft.capacity === '' ? null : Number(draft.capacity),
+        is_classroom: draft.is_classroom,
+      };
+      await createRoom(payload);
+      nameInput.value = '';
+      typeInput.value = '';
+      capacityInput.value = '';
+      checkbox.checked = false;
+      draft.name = '';
+      draft.type = '';
+      draft.capacity = '';
+      draft.is_classroom = false;
+      await onRefresh();
+      setStatus('Raum angelegt.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+    } finally {
+      addBtn.disabled = false;
+      updateButtonState();
     }
   });
   actionCell.appendChild(addBtn);
@@ -442,7 +787,7 @@ function createCurriculumSection() {
       setStatus('Stundentafel geladen.');
       setTimeout(clearStatus, 2000);
     } catch (err) {
-      setStatus(`Fehler beim Laden: ${err.message || err}`, true);
+      setStatus(`Fehler beim Laden: ${formatError(err)}`, true);
     }
   }
 
@@ -474,44 +819,90 @@ function createCurriculumSection() {
     const td = document.createElement('td');
     const key = `${classId}|${subjectId}`;
     const entry = state.entries.get(key);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex items-center gap-2';
+
     const input = document.createElement('input');
     input.type = 'number';
     input.min = '0';
     input.className = 'input input-bordered input-sm w-20';
     input.value = entry?.wochenstunden ?? '';
     input.placeholder = '0';
-    input.addEventListener('blur', () => handleCurriculumChange(key, entry, input.value));
-    td.appendChild(input);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn btn-ghost btn-xs text-error';
+    deleteBtn.textContent = '✕';
+    deleteBtn.title = 'Eintrag löschen';
+    deleteBtn.disabled = !entry;
+
+    let suppressBlur = false;
+
+    input.addEventListener('blur', () => {
+      if (suppressBlur) {
+        suppressBlur = false;
+        return;
+      }
+      handleCurriculumChange(key, input.value, { input, deleteBtn });
+    });
+
+    input.addEventListener('keydown', evt => {
+      if (evt.key === 'Enter') {
+        evt.preventDefault();
+        input.blur();
+      }
+    });
+
+    deleteBtn.addEventListener('mousedown', () => {
+      suppressBlur = true;
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+      suppressBlur = false;
+      const confirmed = await confirmModal({
+        title: 'Eintrag löschen',
+        message: 'Eintrag wirklich löschen?',
+        confirmText: 'Löschen',
+      });
+      if (!confirmed) return;
+      await handleCurriculumDelete(key, { input, deleteBtn });
+    });
+
+    wrapper.append(input, deleteBtn);
+    td.appendChild(wrapper);
     return td;
   }
 
-  async function handleCurriculumChange(key, entry, rawValue) {
-    const value = rawValue === '' ? null : Number(rawValue);
-    if (value === null || Number.isNaN(value) || value <= 0) {
-      if (entry) {
-        setStatus('Lösche Eintrag…');
-        try {
-          await deleteCurriculum(entry.id);
-          state.entries.delete(key);
-          setStatus('Eintrag gelöscht.');
-          setTimeout(clearStatus, 1500);
-        } catch (err) {
-          setStatus(`Fehler: ${err.message || err}`, true);
-        }
+  async function handleCurriculumChange(key, rawValue, controls) {
+    const current = state.entries.get(key);
+    const trimmed = (rawValue ?? '').toString().trim();
+
+    if (trimmed === '') {
+      await handleCurriculumDelete(key, controls);
+      return;
+    }
+
+    const value = Number(trimmed);
+    if (Number.isNaN(value) || value <= 0) {
+      if (controls?.input) {
+        controls.input.value = current?.wochenstunden ?? '';
       }
       return;
     }
 
-    if (entry) {
-      if (entry.wochenstunden === value) return;
+    if (current) {
+      if (current.wochenstunden === value) return;
       setStatus('Aktualisiere Eintrag…');
       try {
-        const updated = await updateCurriculum(entry.id, { wochenstunden: value });
+        const updated = await updateCurriculum(current.id, { wochenstunden: value });
         state.entries.set(key, updated);
+        if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
         setStatus('Aktualisiert.');
         setTimeout(clearStatus, 1500);
       } catch (err) {
-        setStatus(`Fehler: ${err.message || err}`, true);
+        setStatus(`Fehler: ${formatError(err)}`, true);
+        if (controls?.input) controls.input.value = current.wochenstunden ?? '';
       }
     } else {
       const [classId, subjectId] = key.split('|').map(Number);
@@ -519,11 +910,35 @@ function createCurriculumSection() {
       try {
         const created = await createCurriculum({ class_id: classId, subject_id: subjectId, wochenstunden: value });
         state.entries.set(key, created);
+        if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
         setStatus('Eintrag angelegt.');
         setTimeout(clearStatus, 1500);
       } catch (err) {
-        setStatus(`Fehler: ${err.message || err}`, true);
+        setStatus(`Fehler: ${formatError(err)}`, true);
+        if (controls?.input) controls.input.value = '';
       }
+    }
+  }
+
+  async function handleCurriculumDelete(key, controls) {
+    const current = state.entries.get(key);
+    if (!current) {
+      if (controls?.input) controls.input.value = '';
+      if (controls?.deleteBtn) controls.deleteBtn.disabled = true;
+      return;
+    }
+    setStatus('Lösche Eintrag…');
+    try {
+      await deleteCurriculum(current.id);
+      state.entries.delete(key);
+      if (controls?.input) controls.input.value = '';
+      if (controls?.deleteBtn) controls.deleteBtn.disabled = true;
+      setStatus('Eintrag gelöscht.');
+      setTimeout(clearStatus, 1500);
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+      if (controls?.input) controls.input.value = current.wochenstunden ?? '';
+      if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
     }
   }
 

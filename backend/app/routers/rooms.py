@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import Room
+from ..models import Room, Subject
 
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
@@ -63,7 +63,12 @@ def delete_room(room_id: int, session: Session = Depends(get_session)) -> dict:
     r = session.get(Room, room_id)
     if not r:
         raise HTTPException(status_code=404, detail="room not found")
+    subject_usage = session.exec(select(Subject.id).where(Subject.required_room_id == room_id).limit(1)).first()
+    if subject_usage:
+        raise HTTPException(
+            status_code=400,
+            detail="Raum kann nicht gelöscht werden. Bitte entferne zuerst Fächer, die diesen Raum als Pflicht-Raum verwenden.",
+        )
     session.delete(r)
     session.commit()
     return {"ok": True}
-
