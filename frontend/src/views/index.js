@@ -1,11 +1,12 @@
 import { createDataMaintenanceView } from './maintenance.js';
 import { createDistributionView } from './distribution.js';
+import { createBasisplanView } from './basisplan.js';
 
 const registry = new Map();
 
 // Register default placeholder views
 registry.set('#/plan', () => createPlaceholder('Planerstellung', 'Hier entstehen später die Planungswerkzeuge.'));
-registry.set('#/basisplan', () => createPlaceholder('Basisplan', 'Schrittweiser Aufbau des Basisplans.'));
+registry.set('#/basisplan', () => createBasisplanView());
 registry.set('#/stundenverteilung', () => createDistributionView());
 registry.set('#/datenpflege', () => createDataMaintenanceView());
 registry.set('#/einstellungen', () => createSettingsView());
