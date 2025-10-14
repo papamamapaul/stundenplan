@@ -5,11 +5,6 @@ const NAVIGATION = [
       { label: 'Dashboard', hash: '#/plan' },
       { label: 'Basisplan', hash: '#/basisplan' },
       { label: 'Stundenverteilung', hash: '#/stundenverteilung' },
-    ],
-  },
-  {
-    group: 'Stammdaten',
-    items: [
       { label: 'Datenpflege', hash: '#/datenpflege' },
     ],
   },

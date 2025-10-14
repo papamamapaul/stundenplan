@@ -39,6 +39,8 @@ def fetch_requirements_dataframe(session: Session) -> Tuple[pd.DataFrame, List[i
     subjects = {s.id: s.name for s in subject_rows}
     subject_room = {s.id: s.required_room_id for s in subject_rows}
     rooms = {r.id: r.name for r in room_rows}
+    subject_band = {s.id: bool(s.is_bandfach) for s in subject_rows}
+    subject_ag = {s.id: bool(s.is_ag_foerder) for s in subject_rows}
     teachers = {t.id: t.name for t in session.exec(select(Teacher)).all()}
     classes = {c.id: c.name for c in session.exec(select(Class)).all()}
 
@@ -46,18 +48,20 @@ def fetch_requirements_dataframe(session: Session) -> Tuple[pd.DataFrame, List[i
     for r in reqs:
         room_id = subject_room.get(r.subject_id)
         room_name = rooms.get(room_id) if room_id else None
-        records.append(
-            {
-                "Fach": subjects.get(r.subject_id, str(r.subject_id)),
-                "Klasse": classes.get(r.class_id, str(r.class_id)),
-                "Lehrer": teachers.get(r.teacher_id, str(r.teacher_id)),
-                "Wochenstunden": int(r.wochenstunden),
-                "Doppelstunde": r.doppelstunde.value,
-                "Nachmittag": r.nachmittag.value,
-                "RoomID": room_id,
-                "Room": room_name,
-            }
-        )
+        is_bandfach = subject_band.get(r.subject_id, False)
+        record = {
+            "Fach": subjects.get(r.subject_id, str(r.subject_id)),
+            "Klasse": classes.get(r.class_id, str(r.class_id)),
+            "Lehrer": teachers.get(r.teacher_id, str(r.teacher_id)),
+            "Wochenstunden": int(r.wochenstunden),
+            "Doppelstunde": r.doppelstunde.value,
+            "Nachmittag": r.nachmittag.value,
+            "RoomID": room_id,
+            "Room": room_name,
+        }
+        record["Bandfach"] = bool(is_bandfach)
+        record["AGFoerder"] = bool(subject_ag.get(r.subject_id, False))
+        records.append(record)
 
     df = pd.DataFrame.from_records(records)
     FACH_ID = list(df.index)
@@ -73,6 +77,8 @@ def solve_best_plan(
     LEHRER: List[str],
     regeln: Dict[str, int | bool],
     room_plan: Optional[Dict[int, Dict[str, List[bool]]]] = None,
+    fixed_slots: Optional[Dict[int, List[Tuple[str, int]]]] = None,
+    flexible_groups: Optional[List[Dict[str, object]]] = None,
     multi_start: bool = True,
     max_attempts: int = 10,
     patience: int = 3,
@@ -102,7 +108,19 @@ def solve_best_plan(
     def solve_once(seed: int):
         model = cp_model.CpModel()
         plan = {(fid, tag, std): model.NewBoolVar(f"plan_{fid}_{tag}_{std}") for fid in FACH_ID for tag in TAGE for std in range(8)}
-        add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln, room_plan=room_plan)
+        add_constraints(
+            model,
+            plan,
+            df,
+            FACH_ID,
+            TAGE,
+            KLASSEN,
+            LEHRER,
+            regeln,
+            room_plan=room_plan,
+            fixed_slots=fixed_slots,
+            flexible_groups=flexible_groups,
+        )
 
         if use_value_hints:
             add_value_hints_evenly(model, plan, slots_per_day=6, seed=seed)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Dict, Tuple
 import json
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from ortools.sat.python import cp_model
@@ -108,6 +109,16 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     if df.empty:
         raise HTTPException(status_code=400, detail="Keine Requirements in der DB – bitte zuerst Bedarf anlegen.")
 
+    subject_rows = session.exec(select(Subject)).all()
+    class_rows = session.exec(select(Class)).all()
+    teacher_rows = session.exec(select(Teacher)).all()
+
+    subject_id_to_name = {s.id: s.name for s in subject_rows}
+    subjects_by_name = {s.name: s.id for s in subject_rows}
+    class_id_to_name = {c.id: c.name for c in class_rows}
+    classes_by_name = {c.name: c.id for c in class_rows}
+    teachers_by_name = {t.name: t.id for t in teacher_rows}
+
     # Regelprofil laden oder Defaults
     rules: dict = {}
     if req.rule_profile_id is not None:
@@ -121,6 +132,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
 
     # Basisplan-Raumverfügbarkeit laden (optional)
     room_plan: dict[int, dict[str, list[bool]]] = {}
+    basis_payload: Dict[str, object] = {}
     basis_row = session.exec(select(BasisPlan)).first()
     if basis_row and basis_row.data:
         try:
@@ -160,6 +172,129 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
                     ]
             room_plan[rid_int] = normalized
 
+    DAY_KEY_TO_TAG = {
+        "mon": "Mo",
+        "tue": "Di",
+        "wed": "Mi",
+        "thu": "Do",
+        "fri": "Fr",
+    }
+
+    fixed_slot_map: Dict[int, List[Tuple[str, int]]] = {}
+    flexible_groups: List[Dict[str, object]] = []
+    basis_errors: set[str] = set()
+
+    fid_hours = {fid: int(df.loc[fid, "Wochenstunden"]) for fid in FACH_ID}
+    fid_usage = defaultdict(int)
+    class_subject_fids: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    for fid in FACH_ID:
+        key = (str(df.loc[fid, "Klasse"]), str(df.loc[fid, "Fach"]))
+        class_subject_fids[key].append(fid)
+
+    def pick_fid(key: Tuple[str, str]) -> int | None:
+        fids = class_subject_fids.get(key)
+        if not fids:
+            return None
+        for fid in fids:
+            if fid_usage[fid] < fid_hours[fid]:
+                fid_usage[fid] += 1
+                return fid
+        return None
+
+    fixed_cfg = basis_payload.get("fixed") or {}
+    if isinstance(fixed_cfg, dict):
+        for class_key, entries in fixed_cfg.items():
+            try:
+                class_id_int = int(class_key)
+            except (TypeError, ValueError):
+                continue
+            class_name = class_id_to_name.get(class_id_int)
+            if not class_name:
+                continue
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                subject_id = entry.get("subjectId") or entry.get("subject_id")
+                day_key = entry.get("day")
+                slot_index = entry.get("slot")
+                if subject_id is None or day_key not in DAY_KEY_TO_TAG or slot_index is None:
+                    continue
+                subject_name = subject_id_to_name.get(int(subject_id))
+                if not subject_name:
+                    continue
+                solver_day = DAY_KEY_TO_TAG[day_key]
+                try:
+                    slot_int = int(slot_index)
+                except (TypeError, ValueError):
+                    continue
+                if slot_int < 0 or slot_int >= 8:
+                    continue
+                key = (class_name, subject_name)
+                fid = pick_fid(key)
+                if fid is None:
+                    basis_errors.add(f"Zu viele feste Slots für {class_name} / {subject_name}.")
+                    continue
+                fixed_slot_map.setdefault(fid, []).append((solver_day, slot_int))
+
+    flex_cfg = basis_payload.get("flexible") or {}
+    if isinstance(flex_cfg, dict):
+        for class_key, groups in flex_cfg.items():
+            try:
+                class_id_int = int(class_key)
+            except (TypeError, ValueError):
+                continue
+            class_name = class_id_to_name.get(class_id_int)
+            if not class_name:
+                continue
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                subject_id = group.get("subjectId") or group.get("subject_id")
+                if subject_id is None:
+                    continue
+                subject_name = subject_id_to_name.get(int(subject_id))
+                if not subject_name:
+                    continue
+                option_set = set()
+                for slot in group.get("slots") or []:
+                    if not isinstance(slot, dict):
+                        continue
+                    day_key = slot.get("day")
+                    solver_day = DAY_KEY_TO_TAG.get(day_key or "")
+                    if solver_day is None:
+                        continue
+                    try:
+                        slot_int = int(slot.get("slot"))
+                    except (TypeError, ValueError):
+                        continue
+                    if slot_int < 0 or slot_int >= 8:
+                        continue
+                    option_set.add((solver_day, slot_int))
+                if not option_set:
+                    continue
+                key = (class_name, subject_name)
+                fid = pick_fid(key)
+                if fid is None:
+                    basis_errors.add(f"Zu viele Optionen für {class_name} / {subject_name}.")
+                    continue
+                flexible_groups.append({
+                    "fid": fid,
+                    "slots": sorted(option_set, key=lambda item: (TAGE.index(item[0]) if item[0] in TAGE else 0, item[1])),
+                })
+
+    if fixed_slot_map:
+        fixed_slot_map = {
+            fid: sorted(set(slots), key=lambda item: (TAGE.index(item[0]) if item[0] in TAGE else 0, item[1]))
+            for fid, slots in fixed_slot_map.items()
+        }
+
+    if basis_errors:
+        raise HTTPException(status_code=400, detail=" ".join(sorted(basis_errors)))
+
     # Solver laufen lassen
     status, solver, model, plan, best_score = solve_best_plan(
         df=df,
@@ -168,6 +303,8 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         LEHRER=LEHRER,
         regeln=rules,
         room_plan=room_plan or None,
+        fixed_slots=fixed_slot_map or None,
+        flexible_groups=flexible_groups or None,
         multi_start=req.params.multi_start,
         max_attempts=req.params.max_attempts,
         patience=req.params.patience,
@@ -194,10 +331,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     session.commit()
     session.refresh(plan_row)
 
-    # Helpers für IDs
-    subjects_by_name = {s.name: s.id for s in session.exec(select(Subject)).all()}
-    teachers_by_name = {t.name: t.id for t in session.exec(select(Teacher)).all()}
-    classes_by_name = {c.name: c.id for c in session.exec(select(Class)).all()}
+    # Helpers für IDs (bereits vorbereitet)
 
     # Slots sammeln und speichern
     slots_out: List[PlanSlotOut] = []

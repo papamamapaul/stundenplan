@@ -50,6 +50,8 @@ class Subject(SQLModel, table=True):
     # Defaults for planning preferences
     default_doppelstunde: Optional[DoppelstundeEnum] = Field(default=None)
     default_nachmittag: Optional[NachmittagEnum] = Field(default=None)
+    is_bandfach: bool = Field(default=False)
+    is_ag_foerder: bool = Field(default=False)
 
 
 class Requirement(SQLModel, table=True):

@@ -1,7 +1,8 @@
 import { fetchTeachers } from '../api/teachers.js';
 import { fetchClasses } from '../api/classes.js';
-import { fetchSubjects } from '../api/subjects.js';
+import { fetchSubjects, updateSubject } from '../api/subjects.js';
 import { fetchCurriculum } from '../api/curriculum.js';
+import { fetchRooms } from '../api/rooms.js';
 import { fetchVersions, createVersion, updateVersion, deleteVersion } from '../api/versions.js';
 import { fetchRequirements, createRequirement, updateRequirement, deleteRequirement } from '../api/requirements.js';
 import { confirmModal, formModal, formatError } from '../utils/ui.js';
@@ -52,6 +53,7 @@ export function createDistributionView() {
     collapsedTeachers: new Set(),
     teacherSort: 'name',
     showOnlyWithCapacity: false,
+    rooms: [],
   };
 
   const maps = {
@@ -59,6 +61,24 @@ export function createDistributionView() {
     subjects: new Map(),
     teachers: new Map(),
   };
+
+const DOPPEL_OPTIONS = [
+  { value: 'muss', label: 'Muss Doppelstunde' },
+  { value: 'kann', label: 'Darf Einzelstunde' },
+  { value: 'nein', label: 'Nur Einzelstunden' },
+];
+
+const NACHMITTAG_OPTIONS = [
+  { value: 'muss', label: 'Muss am Nachmittag' },
+  { value: 'kann', label: 'Kann am Nachmittag' },
+  { value: 'nein', label: 'Kein Nachmittag' },
+];
+
+function labelForOption(options, value) {
+  const opt = options.find(o => o.value === value);
+  return opt ? opt.label : value;
+}
+
 
   let currentDragPayload = null;
 
@@ -99,18 +119,20 @@ export function createDistributionView() {
   async function initialize() {
     setStatus('Lade Stammdaten…');
     try {
-      const [teachers, classes, subjects, curriculum, versions] = await Promise.all([
+      const [teachers, classes, subjects, curriculum, versions, rooms] = await Promise.all([
         fetchTeachers(),
         fetchClasses(),
         fetchSubjects(),
         fetchCurriculum(),
         fetchVersions(),
+        fetchRooms(),
       ]);
       state.teachers = teachers;
       state.classes = classes;
       state.subjects = subjects;
       state.curriculum = curriculum;
       state.versions = versions;
+      state.rooms = rooms;
       state.collapsedTeachers = new Set(
         [...state.collapsedTeachers].filter(id => teachers.some(t => t.id === id))
       );
@@ -674,10 +696,19 @@ export function createDistributionView() {
             const classLine = document.createElement('span');
             classLine.className = 'text-[11px] opacity-70';
             classLine.textContent = cls?.name || 'Klasse';
-            labelCol.append(subjectWrap, classLine);
+            const metaLine = document.createElement('span');
+            metaLine.className = 'text-[10px] opacity-60';
+            metaLine.textContent = requirementMetaSummary(entry);
+            labelCol.append(subjectWrap, classLine, metaLine);
 
             const controls = document.createElement('div');
             controls.className = 'flex items-center gap-1';
+
+            const settingsBtn = document.createElement('button');
+            settingsBtn.type = 'button';
+            settingsBtn.className = 'btn btn-ghost btn-xs';
+            settingsBtn.textContent = '⚙';
+            settingsBtn.title = 'Einstellungen';
 
             const minusBtn = document.createElement('button');
             minusBtn.type = 'button';
@@ -689,7 +720,7 @@ export function createDistributionView() {
             removeBtn.className = 'btn btn-ghost btn-xs text-error';
             removeBtn.textContent = '×';
 
-            controls.append(minusBtn, removeBtn);
+            controls.append(settingsBtn, minusBtn, removeBtn);
             row.append(labelCol, controls);
             assignmentList.appendChild(row);
 
@@ -711,6 +742,7 @@ export function createDistributionView() {
               currentDragPayload = null;
             });
 
+            settingsBtn.addEventListener('click', () => openRequirementSettings(entry, teacher));
             minusBtn.addEventListener('click', () => adjustAssignment(entry, teacher.id, -1));
             removeBtn.addEventListener('click', async () => {
               const confirmed = await confirmModal({
@@ -868,30 +900,122 @@ export function createDistributionView() {
     return load.used + amount <= load.limit;
   }
 
+  async function openRequirementSettings(entry, teacher) {
+    if (!entry?.records?.length) return;
+    const baseRecord = entry.records[0];
+    const subject = maps.subjects.get(entry.subjectId);
+    const cls = maps.classes.get(entry.classId);
+
+    const currentDs = baseRecord.doppelstunde || 'kann';
+    const currentNm = baseRecord.nachmittag || 'kann';
+    const currentRoomId = subject?.required_room_id ? String(subject.required_room_id) : '';
+
+    const roomOptions = [
+      { value: '', label: 'Kein Pflicht-Raum' },
+      ...state.rooms.map(room => ({ value: String(room.id), label: room.name || `#${room.id}` })),
+    ];
+
+    const values = await formModal({
+      title: 'Planungsparameter anpassen',
+      message: [
+        formatSubjectLabel(subject),
+        formatClassLabel(cls),
+        teacher?.name || maps.teachers.get(baseRecord.teacher_id)?.name || '',
+      ].filter(Boolean).join(' · '),
+      confirmText: 'Speichern',
+      fields: [
+        {
+          name: 'doppelstunde',
+          label: 'Doppelstunde',
+          type: 'select',
+          options: DOPPEL_OPTIONS,
+          value: currentDs,
+        },
+        {
+          name: 'nachmittag',
+          label: 'Nachmittag',
+          type: 'select',
+          options: NACHMITTAG_OPTIONS,
+          value: currentNm,
+        },
+        {
+          name: 'required_room_id',
+          label: 'Pflichtraum',
+          type: 'select',
+          options: roomOptions,
+          value: currentRoomId,
+        },
+      ],
+    });
+    if (!values) return;
+
+    const newDs = values.doppelstunde || currentDs;
+    const newNm = values.nachmittag || currentNm;
+    const newRoomId = values.required_room_id ? Number(values.required_room_id) : null;
+
+    setStatus('Speichere Einstellungen…');
+    try {
+      await Promise.all(entry.records.map(async rec => {
+        const payload = {
+          class_id: rec.class_id,
+          subject_id: rec.subject_id,
+          teacher_id: rec.teacher_id,
+          version_id: rec.version_id,
+          wochenstunden: rec.wochenstunden,
+          doppelstunde: newDs,
+          nachmittag: newNm,
+        };
+        const updated = await updateRequirement(rec.id, payload);
+        Object.assign(rec, updated);
+        const idx = state.requirements.findIndex(item => item.id === rec.id);
+        if (idx >= 0) {
+          state.requirements[idx] = rec;
+        }
+      }));
+
+      if (subject && (subject.required_room_id ?? null) !== newRoomId) {
+        const updatedSubject = await updateSubject(subject.id, { required_room_id: newRoomId });
+        Object.assign(subject, updatedSubject);
+        const sIdx = state.subjects.findIndex(item => item.id === subject.id);
+        if (sIdx >= 0) state.subjects[sIdx] = subject;
+        maps.subjects.set(subject.id, subject);
+      }
+
+      setStatus('Einstellungen gespeichert.');
+      setTimeout(clearStatus, 1500);
+      renderBoard();
+    } catch (err) {
+      setStatus(`Fehler: ${formatError(err)}`, true);
+    }
+  }
+
   async function assignHour(teacherId, classId, subjectId, amount = 1) {
     setStatus('Speichere Zuweisung…');
     try {
       const key = `${classId}|${subjectId}`;
       const existing = findRequirement(teacherId, classId, subjectId);
       if (existing) {
-        const payload = {
-          class_id: existing.class_id,
-          subject_id: existing.subject_id,
-          teacher_id: existing.teacher_id,
-          version_id: existing.version_id,
-          wochenstunden: (existing.wochenstunden || 0) + amount,
-          doppelstunde: existing.doppelstunde ?? null,
-          nachmittag: existing.nachmittag ?? null,
-        };
-        const updated = await updateRequirement(existing.id, payload);
-        Object.assign(existing, updated);
-      } else {
+          const payload = {
+            class_id: existing.class_id,
+            subject_id: existing.subject_id,
+            teacher_id: existing.teacher_id,
+            version_id: existing.version_id,
+            wochenstunden: (existing.wochenstunden || 0) + amount,
+            doppelstunde: existing.doppelstunde ?? null,
+            nachmittag: existing.nachmittag ?? null,
+          };
+          const updated = await updateRequirement(existing.id, payload);
+          Object.assign(existing, updated);
+        } else {
+        const subject = maps.subjects.get(subjectId);
         const created = await createRequirement({
           class_id: classId,
           subject_id: subjectId,
           teacher_id: teacherId,
           version_id: state.selectedVersionId,
           wochenstunden: amount,
+          doppelstunde: subject?.default_doppelstunde ?? subject?.default_doppelstunde ?? null,
+          nachmittag: subject?.default_nachmittag ?? subject?.default_nachmittag ?? null,
         });
         state.requirements.push(created);
       }
@@ -1185,6 +1309,39 @@ function countRemainingHours(map) {
     if (cls.name) return cls.name;
     if (cls.grade && cls.section) return `${cls.grade}${cls.section}`;
     return `Klasse #${cls.id ?? '?'}`;
+  }
+
+  function requirementMetaSummary(entry) {
+    const rec = entry?.records?.[0];
+    if (!rec) return '';
+
+    const parts = [];
+
+    const dsValue = rec.doppelstunde || 'kann';
+    if (dsValue !== 'kann') {
+      const label = labelForOption(DOPPEL_OPTIONS, dsValue);
+      if (label) parts.push(label);
+    }
+
+    const nmValue = rec.nachmittag || 'kann';
+    if (nmValue !== 'kann') {
+      const label = labelForOption(NACHMITTAG_OPTIONS, nmValue);
+      if (label) parts.push(label);
+    }
+
+    const subject = maps.subjects.get(entry.subjectId);
+    if (subject?.required_room_id) {
+      const room = state.rooms.find(r => r.id === subject.required_room_id);
+      if (room?.name) {
+        parts.push(`Raum ${room.name}`);
+      }
+    }
+
+    if (subject?.is_ag_foerder) {
+      parts.push('AG/Förder');
+    }
+
+    return parts.join(' · ');
   }
 
 function stateClassesSorted() {

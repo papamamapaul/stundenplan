@@ -92,6 +92,8 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             default_doppelstunde=(s.default_doppelstunde.value if s.default_doppelstunde else None),
             default_nachmittag=(s.default_nachmittag.value if s.default_nachmittag else None),
             required_room=room_by_id[s.required_room_id].name if (s.required_room_id and room_by_id.get(s.required_room_id)) else None,
+            is_bandfach=s.is_bandfach,
+            is_ag_foerder=s.is_ag_foerder,
         )
         for s in subjects
     ]
@@ -246,6 +248,10 @@ def import_data(
         if bs.required_room is not None:
             room = session.exec(select(Room).where(Room.name == bs.required_room)).first()
             s.required_room_id = room.id if room else None
+        if bs.is_bandfach is not None:
+            s.is_bandfach = bool(bs.is_bandfach)
+        if bs.is_ag_foerder is not None:
+            s.is_ag_foerder = bool(bs.is_ag_foerder)
         session.add(s); session.commit(); session.refresh(s)
         return s
 

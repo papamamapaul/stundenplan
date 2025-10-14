@@ -23,10 +23,57 @@ const SLOTS = [
   { id: 'slot-8', label: '14:20 – 15:05' },
 ];
 
-const DEFAULT_META = { version: 1 };
+const DEFAULT_META = { version: 1, flexCounter: 1 };
 const DEFAULT_KEY = '__all';
 
+let basisplanStylesInjected = false;
+function ensureBasisplanStyles() {
+  if (basisplanStylesInjected) return;
+  const style = document.createElement('style');
+  style.textContent = `
+  .basis-grid {
+    background: var(--b1);
+  }
+  .basis-grid__sticky-col {
+    position: sticky;
+    left: 0;
+    z-index: 30;
+    background: var(--b1);
+  }
+  .basis-grid__sticky-corner {
+    position: sticky;
+    left: 0;
+    top: 0;
+    z-index: 50;
+    background: var(--b1);
+  }
+  .basis-grid__sticky-top {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--b1);
+  }
+  .basis-grid__sticky-top.basis-grid__sticky-col {
+    z-index: 60;
+  }
+  .basis-slot-cell {
+    transition: background-color 120ms ease;
+  }
+  .basis-slot-cell.bg-base-200 {
+    opacity: 0.7;
+  }
+  .basis-grid__pending-target {
+    outline: 2px dashed var(--p);
+    outline-offset: -2px;
+    cursor: copy;
+  }
+  `;
+  document.head.appendChild(style);
+  basisplanStylesInjected = true;
+}
+
 export function createBasisplanView() {
+  ensureBasisplanStyles();
   const container = document.createElement('section');
   container.className = 'space-y-6';
 
@@ -66,7 +113,7 @@ export function createBasisplanView() {
   const gridContainer = document.createElement('div');
   gridContainer.className = 'overflow-x-auto';
 
-  container.append(header, toolbar, status.element, paletteContainer, gridContainer);
+  container.append(header, toolbar, paletteContainer, gridContainer);
 
   const state = {
     loading: false,
@@ -76,14 +123,18 @@ export function createBasisplanView() {
     remaining: new Map(), // classId -> Map(subjectId -> remainingHours)
     windows: {},
     fixed: {},
-    rawData: { meta: { ...DEFAULT_META }, windows: {}, fixed: {}, rooms: {}, classes: {} },
+    flexible: {},
+    rawData: { meta: { ...DEFAULT_META }, windows: {}, fixed: {}, flexible: {}, rooms: {}, classes: {} },
     selectedClassId: 'all',
     saveTimer: null,
     saving: false,
+    assignmentMode: 'fixed',
+    pendingRange: null,
   };
 
   classSelect.addEventListener('change', () => {
     state.selectedClassId = classSelect.value;
+    state.pendingRange = null;
     renderGrid();
   });
 
@@ -109,7 +160,8 @@ export function createBasisplanView() {
     }
     ensureWindowsFor(DEFAULT_KEY);
     state.classes.forEach(cls => {
-      ensureWindowsFor(String(cls.id));
+      const key = String(cls.id);
+      if (state.windows[key]) ensureWindowsFor(key);
     });
     state.rawData.windows = deepClone(state.windows);
   }
@@ -135,7 +187,20 @@ export function createBasisplanView() {
     state.windows[key].allowed[dayKey][slotIndex] = value;
     state.rawData.windows = deepClone(state.windows);
     scheduleSave();
-    renderGrid();
+
+    if (state.selectedClassId === 'all') {
+      renderGrid();
+      return;
+    }
+
+    const selector = `[data-class-id=\"${targetClassId}\"][data-day=\"${dayKey}\"][data-slot-index=\"${slotIndex}\"]`;
+    const cell = gridContainer.querySelector(selector);
+    if (cell) {
+      cell.setAttribute('data-allowed', value ? '1' : '0');
+      cell.classList.toggle('bg-success/10', value);
+      cell.classList.toggle('bg-base-200', !value);
+      cell.classList.toggle('opacity-50', !value);
+    }
   }
 
   function buildCurriculumMap(curriculum) {
@@ -165,6 +230,77 @@ export function createBasisplanView() {
     return out;
   }
 
+  function cloneFlexible(rawFlexible = {}) {
+    const out = {};
+    Object.entries(rawFlexible).forEach(([classId, groups]) => {
+      if (!Array.isArray(groups)) {
+        out[classId] = [];
+        return;
+      }
+      out[classId] = groups
+        .map(group => ({
+          id: group.id ?? group.groupId ?? null,
+          subjectId: Number(group.subjectId ?? group.subject_id),
+          slots: Array.isArray(group.slots)
+            ? group.slots
+                .map(slot => {
+                  const slotValue = Math.trunc(Number(slot.slot));
+                  if (!slot.day || Number.isNaN(slotValue)) {
+                    return null;
+                  }
+                  return {
+                    day: slot.day,
+                    slot: slotValue,
+                  };
+                })
+                .filter(Boolean)
+            : [],
+        }))
+        .filter(group => group.id && Number.isFinite(group.subjectId) && group.slots.length);
+    });
+    return out;
+  }
+
+  function ensureFlexCounter() {
+    if (!state.rawData.meta) state.rawData.meta = { ...DEFAULT_META };
+    if (typeof state.rawData.meta.flexCounter !== 'number' || Number.isNaN(state.rawData.meta.flexCounter)) {
+      state.rawData.meta.flexCounter = 1;
+    }
+    const flexData = state.rawData.flexible || {};
+    let maxId = 0;
+    Object.values(flexData).forEach(groups => {
+      if (!Array.isArray(groups)) return;
+      groups.forEach(group => {
+        const groupId = group?.id ?? group?.groupId;
+        if (typeof groupId === 'string' && groupId.startsWith('flex-')) {
+          const tail = Number(groupId.slice(5));
+          if (!Number.isNaN(tail)) {
+            maxId = Math.max(maxId, tail);
+          }
+        }
+      });
+    });
+    if (maxId >= state.rawData.meta.flexCounter) {
+      state.rawData.meta.flexCounter = maxId + 1;
+    }
+  }
+
+  function createFlexibleGroupId() {
+    ensureFlexCounter();
+    const next = Number(state.rawData.meta.flexCounter) || 1;
+    state.rawData.meta.flexCounter = next + 1;
+    return `flex-${next}`;
+  }
+
+  function getFlexibleGroups(classId) {
+    return state.flexible[String(classId)] || [];
+  }
+
+  function getFlexibleGroup(classId, groupId) {
+    const groups = getFlexibleGroups(classId);
+    return groups.find(group => group.id === groupId) || null;
+  }
+
   function recomputeRemaining() {
     const remaining = new Map();
     state.classes.forEach(cls => {
@@ -173,6 +309,12 @@ export function createBasisplanView() {
       const fixedEntries = state.fixed[classId] || [];
       fixedEntries.forEach(entry => {
         const subjectId = Number(entry.subjectId);
+        const current = totals.get(subjectId) || 0;
+        totals.set(subjectId, Math.max(0, current - 1));
+      });
+      const flexibleGroups = state.flexible[classId] || [];
+      flexibleGroups.forEach(group => {
+        const subjectId = Number(group.subjectId);
         const current = totals.get(subjectId) || 0;
         totals.set(subjectId, Math.max(0, current - 1));
       });
@@ -197,10 +339,15 @@ export function createBasisplanView() {
         meta: { ...(state.rawData?.meta || DEFAULT_META) },
         windows: state.windows,
         fixed: state.fixed,
+        flexible: state.flexible,
       };
       const response = await updateBasisplan({ data: payloadData, name: state.rawData?.name || 'Basisplan' });
       state.rawData = response.data ? response.data : payloadData;
       state.rawData.meta = state.rawData.meta || { ...DEFAULT_META };
+      ensureFlexCounter();
+      state.rawData.windows = deepClone(state.windows);
+      state.rawData.fixed = deepClone(state.fixed);
+      state.rawData.flexible = deepClone(state.flexible);
       status.set('Gespeichert.');
       setTimeout(status.clear, 1500);
     } catch (err) {
@@ -217,14 +364,22 @@ export function createBasisplanView() {
     palette.className = 'space-y-3';
 
     const headerRow = document.createElement('div');
-    headerRow.className = 'flex items-center justify-between gap-3';
+    headerRow.className = 'flex flex-wrap items-center justify-between gap-3';
     const title = document.createElement('h3');
     title.className = 'text-lg font-semibold';
     title.textContent = 'Fächer-Palette';
     const totalBadge = document.createElement('span');
     totalBadge.className = 'badge badge-outline';
     totalBadge.textContent = `${countRemainingHours()} Stunden offen`;
-    headerRow.append(title, totalBadge);
+    const headerLeft = document.createElement('div');
+    headerLeft.className = 'flex items-center gap-2';
+    headerLeft.appendChild(title);
+
+    const headerRight = document.createElement('div');
+    headerRight.className = 'flex items-center gap-2 flex-wrap';
+    headerRight.append(totalBadge, createAssignmentModeToggle());
+
+    headerRow.append(headerLeft, headerRight);
 
     const scroller = document.createElement('div');
     scroller.className = 'overflow-x-auto pb-1';
@@ -316,10 +471,19 @@ export function createBasisplanView() {
       palette.append(headerRow, scroller);
     }
 
+    if (state.assignmentMode === 'range') {
+      const helper = document.createElement('p');
+      helper.className = 'text-xs opacity-70';
+      helper.textContent = 'Option-Modus aktiv: Fächer via Drag & Drop ablegen und bei Bedarf über das Plus-Symbol weitere Slots wählen.';
+      palette.appendChild(helper);
+    }
+
     paletteContainer.appendChild(palette);
   }
 
   function renderGrid() {
+    const prevScrollLeft = gridContainer.scrollLeft;
+    const prevScrollTop = gridContainer.scrollTop;
     gridContainer.innerHTML = '';
 
     const classes = state.selectedClassId === 'all'
@@ -336,73 +500,103 @@ export function createBasisplanView() {
 
     const columnCount = DAYS.length * classes.length;
     const grid = document.createElement('div');
+    const columnHeaderMap = new Map();
+    const dayHeaderMap = new Map();
+    const timeHeaderMap = new Map();
     grid.className = 'basis-grid border border-base-300 rounded-lg';
     grid.style.display = 'grid';
     grid.style.gridTemplateColumns = `140px repeat(${columnCount}, minmax(140px, 1fr))`;
 
     // Day headers
-    grid.appendChild(createCell('', 'bg-base-200 font-semibold text-center border-b border-base-300'));
+    grid.appendChild(createCell('', 'bg-base-200 font-semibold text-center border-b border-base-300 basis-grid__sticky-corner basis-grid__sticky-top basis-grid__sticky-col'));
     DAYS.forEach(day => {
-      const dayHeader = createCell(day.label, 'bg-base-200 font-semibold text-center border-b border-base-300');
+      const dayHeader = createCell(day.label, 'bg-base-200 font-semibold text-center border-b border-base-300 basis-grid__sticky-top');
       dayHeader.style.gridColumn = `span ${classes.length}`;
+      dayHeaderMap.set(day.key, dayHeader);
       grid.appendChild(dayHeader);
     });
 
     // Class headers per day
-    grid.appendChild(createCell('', 'bg-base-100 border-b border-base-300'));
-    DAYS.forEach(() => {
+    grid.appendChild(createCell('', 'bg-base-100 border-b border-base-300 basis-grid__sticky-col'));
+    DAYS.forEach(day => {
       classes.forEach(cls => {
-        const clsHeader = createCell(cls.name || `Klasse ${cls.id}`, 'bg-base-100 text-xs text-center border-b border-base-300');
+        const clsHeader = createCell(cls.name || `Klasse ${cls.id}`, 'bg-base-100 text-xs text-center border-b border-base-300 basis-grid__sticky-top');
+        columnHeaderMap.set(`${day.key}|${cls.id}`, clsHeader);
         grid.appendChild(clsHeader);
       });
     });
 
     // Time rows
     SLOTS.forEach((slot, slotIndex) => {
-      const timeCell = createCell(slot.label, 'bg-base-100 border-b border-base-300 text-xs font-medium px-3 py-2');
+      const timeCell = createCell(slot.label, 'bg-base-100 border-b border-base-300 text-xs font-medium px-3 py-2 basis-grid__sticky-col');
+      timeHeaderMap.set(slotIndex, timeCell);
       grid.appendChild(timeCell);
 
       DAYS.forEach(day => {
         classes.forEach(cls => {
           const cell = document.createElement('div');
-          cell.className = 'min-h-[80px] border-b border-r border-base-200 px-2 py-1 flex flex-col gap-2 transition-colors';
+          cell.className = 'basis-slot-cell min-h-[80px] border-b border-r border-base-200 px-2 py-1 flex flex-col gap-2';
           cell.dataset.classId = String(cls.id);
           cell.dataset.day = day.key;
           cell.dataset.slotIndex = String(slotIndex);
           const allowed = isSlotAllowed(cls.id, day.key, slotIndex);
+          cell.dataset.allowed = allowed ? '1' : '0';
           cell.classList.toggle('bg-success/10', allowed);
           cell.classList.toggle('bg-base-200', !allowed);
+          cell.classList.toggle('opacity-50', !allowed);
+
+          const pending = state.pendingRange;
+          if (pending && pending.classId === String(cls.id)) {
+            const group = getFlexibleGroup(pending.classId, pending.groupId);
+            const already = group?.slots?.some(slot => slot.day === day.key && slot.slot === slotIndex);
+            if (group && !already) {
+              cell.classList.add('basis-grid__pending-target');
+            }
+          }
 
           cell.addEventListener('click', event => {
-            if (event.target !== cell) return;
-            setSlotAllowed(cls.id, day.key, slotIndex, !allowed);
+            if (event.target.closest('button') || event.target.closest('.basis-slot-entry')) return;
+            if (state.pendingRange) {
+              const pendingRange = state.pendingRange;
+              if (pendingRange.classId === String(cls.id)) {
+                const successful = addFlexibleSlot(cls.id, pendingRange.groupId, day.key, slotIndex);
+                if (!successful) {
+                  // keep pending state for another try
+                }
+              } else {
+                status.set('Option kann nur innerhalb derselben Klasse erweitert werden.', true);
+                setTimeout(status.clear, 1500);
+              }
+              return;
+            }
+            const currentlyAllowed = cell.getAttribute('data-allowed') === '1';
+            setSlotAllowed(cls.id, day.key, slotIndex, !currentlyAllowed);
           });
 
-          setupDropZone(cell, cls.id, day.key, slotIndex);
+          setupDropZone(cell, cls.id, day.key, slotIndex, columnHeaderMap, dayHeaderMap, timeHeaderMap);
           renderFixedEntries(cell, cls.id, day.key, slotIndex);
+          renderFlexibleEntries(cell, cls.id, day.key, slotIndex);
           grid.appendChild(cell);
         });
       });
     });
 
     gridContainer.appendChild(grid);
+    gridContainer.scrollLeft = prevScrollLeft;
+    gridContainer.scrollTop = prevScrollTop;
   }
 
   function renderFixedEntries(cell, classId, dayKey, slotIndex) {
     const classFixed = state.fixed[String(classId)] || [];
     const entries = classFixed.filter(entry => entry.day === dayKey && entry.slot === slotIndex);
     if (!entries.length) {
-      const hint = document.createElement('span');
-      hint.className = 'text-[11px] opacity-50';
-      hint.textContent = 'Leer';
-      cell.appendChild(hint);
       return;
     }
 
     entries.forEach(entry => {
       const subject = state.subjects.get(Number(entry.subjectId));
       const badge = document.createElement('span');
-      badge.className = 'inline-flex items-center gap-2 rounded-lg border bg-base-100 px-2 py-1 text-xs shadow-sm';
+      badge.className = 'basis-slot-entry inline-flex items-center gap-2 rounded-lg border bg-base-100 px-2 py-1 text-xs shadow-sm';
       if (subject?.color) badge.style.borderColor = subject.color;
       badge.draggable = true;
 
@@ -440,9 +634,95 @@ export function createBasisplanView() {
     });
   }
 
-  function setupDropZone(cell, classId, dayKey, slotIndex) {
-    const highlight = () => cell.classList.add('ring', 'ring-primary');
-    const unhighlight = () => cell.classList.remove('ring', 'ring-primary');
+  function renderFlexibleEntries(cell, classId, dayKey, slotIndex) {
+    const groups = getFlexibleGroups(classId).filter(group =>
+      group.slots.some(slot => slot.day === dayKey && slot.slot === slotIndex)
+    );
+    if (!groups.length) return;
+
+    groups.forEach(group => {
+      const subject = state.subjects.get(Number(group.subjectId));
+      const badge = document.createElement('span');
+      badge.className = 'basis-slot-entry inline-flex items-center gap-1 rounded-lg border border-dashed bg-base-100 px-2 py-1 text-xs shadow-sm';
+      badge.draggable = false;
+      if (subject?.color) badge.style.borderColor = subject.color;
+      if (state.pendingRange && state.pendingRange.groupId === group.id) {
+        badge.classList.add('ring', 'ring-primary', 'ring-offset-1');
+      }
+
+      const label = document.createElement('span');
+      label.textContent = `${subject?.kuerzel || subject?.name || `Fach ${group.subjectId}`} (Option)`;
+
+      const btnWrap = document.createElement('div');
+      btnWrap.className = 'flex items-center gap-1';
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn btn-ghost btn-xs px-2';
+      addBtn.textContent = '+';
+      addBtn.title = 'Zusätzlichen Slot hinzufügen';
+      addBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        if (state.pendingRange && state.pendingRange.groupId === group.id) {
+          state.pendingRange = null;
+          status.set('Slot-Auswahl abgebrochen.');
+          setTimeout(status.clear, 1200);
+          renderGrid();
+          return;
+        }
+        state.pendingRange = { classId: String(classId), groupId: group.id };
+        status.set('Bitte einen Slot für die Option anklicken.');
+        renderGrid();
+      });
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn btn-ghost btn-xs text-error px-2';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Slot aus Option entfernen';
+      removeBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        removeFlexibleSlot(classId, group.id, dayKey, slotIndex);
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'btn btn-ghost btn-xs px-2';
+      deleteBtn.textContent = 'Del';
+      deleteBtn.title = 'Option vollständig entfernen';
+      deleteBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        removeFlexibleGroup(classId, group.id);
+      });
+
+      btnWrap.append(addBtn, removeBtn, deleteBtn);
+      badge.append(label, btnWrap);
+      cell.appendChild(badge);
+    });
+  }
+
+  function setupDropZone(cell, classId, dayKey, slotIndex, columnHeaderMap, dayHeaderMap, timeHeaderMap) {
+    const columnKey = `${dayKey}|${classId}`;
+    const highlightHeaders = () => {
+      const colHeader = columnHeaderMap.get(columnKey);
+      if (colHeader) colHeader.classList.add('basis-grid__highlight');
+      const timeHeader = timeHeaderMap.get(slotIndex);
+      if (timeHeader) timeHeader.classList.add('basis-grid__highlight');
+    };
+    const unhighlightHeaders = () => {
+      const colHeader = columnHeaderMap.get(columnKey);
+      if (colHeader) colHeader.classList.remove('basis-grid__highlight');
+      const timeHeader = timeHeaderMap.get(slotIndex);
+      if (timeHeader) timeHeader.classList.remove('basis-grid__highlight');
+    };
+    const highlight = () => {
+      cell.classList.add('basis-slot-cell--drag');
+      highlightHeaders();
+    };
+    const unhighlight = () => {
+      cell.classList.remove('basis-slot-cell--drag');
+      unhighlightHeaders();
+    };
 
     cell.addEventListener('dragenter', event => {
       const data = getDragData(event);
@@ -476,7 +756,11 @@ export function createBasisplanView() {
         return;
       }
       if (data.kind === 'basisPalette') {
-        await addFixedEntry(classId, dayKey, slotIndex, data.subjectId);
+        if (state.assignmentMode === 'range') {
+          await addFlexibleGroupEntry(classId, dayKey, slotIndex, data.subjectId);
+        } else {
+          await addFixedEntry(classId, dayKey, slotIndex, data.subjectId);
+        }
       } else if (data.kind === 'basisFixed') {
         await moveFixedEntry(data.classId, classId, data.day, dayKey, data.slot, slotIndex, data.subjectId);
       }
@@ -485,7 +769,8 @@ export function createBasisplanView() {
 
   function canAcceptDrop(data, classId, dayKey, slotIndex) {
     if (data.kind === 'basisPalette') {
-      return String(data.classId) === String(classId) && isSlotAllowed(classId, dayKey, slotIndex);
+      if (String(data.classId) !== String(classId)) return false;
+      return isSlotAllowed(classId, dayKey, slotIndex);
     }
     if (data.kind === 'basisFixed') {
       return String(data.classId) === String(classId);
@@ -506,6 +791,92 @@ export function createBasisplanView() {
     renderPalette();
     renderGrid();
     scheduleSave();
+  }
+
+  async function addFlexibleGroupEntry(classId, dayKey, slotIndex, subjectId) {
+    const key = String(classId);
+    state.flexible[key] = state.flexible[key] || [];
+    const groupId = createFlexibleGroupId();
+    const group = {
+      id: groupId,
+      subjectId: Number(subjectId),
+      slots: [{ day: dayKey, slot: slotIndex }],
+    };
+    state.flexible[key].push(group);
+    state.rawData.flexible = deepClone(state.flexible);
+    state.pendingRange = null;
+    recomputeRemaining();
+    renderPalette();
+    renderGrid();
+    scheduleSave();
+    status.set('Option angelegt.');
+    setTimeout(status.clear, 1200);
+  }
+
+  function addFlexibleSlot(classId, groupId, dayKey, slotIndex) {
+    const key = String(classId);
+    const group = getFlexibleGroup(classId, groupId);
+    if (!group) return false;
+    if (!isSlotAllowed(classId, dayKey, slotIndex)) {
+      status.set('Slot nicht erlaubt.', true);
+      setTimeout(status.clear, 1500);
+      return false;
+    }
+    if (group.slots.some(slot => slot.day === dayKey && slot.slot === slotIndex)) {
+      status.set('Slot bereits enthalten.', true);
+      setTimeout(status.clear, 1200);
+      return false;
+    }
+    group.slots.push({ day: dayKey, slot: slotIndex });
+    state.pendingRange = null;
+    state.rawData.flexible = deepClone(state.flexible);
+    renderGrid();
+    renderPalette();
+    scheduleSave();
+    status.set('Slot ergänzt.');
+    setTimeout(status.clear, 1200);
+    return true;
+  }
+
+  function removeFlexibleSlot(classId, groupId, dayKey, slotIndex) {
+    const key = String(classId);
+    const groups = getFlexibleGroups(classId);
+    const idx = groups.findIndex(group => group.id === groupId);
+    if (idx === -1) return;
+    const group = groups[idx];
+    group.slots = group.slots.filter(slot => !(slot.day === dayKey && slot.slot === slotIndex));
+    if (group.slots.length === 0) {
+      groups.splice(idx, 1);
+      if (state.pendingRange && state.pendingRange.groupId === groupId) {
+        state.pendingRange = null;
+      }
+      recomputeRemaining();
+    }
+    state.rawData.flexible = deepClone(state.flexible);
+    renderPalette();
+    renderGrid();
+    scheduleSave();
+    status.set('Slot entfernt.');
+    setTimeout(status.clear, 1200);
+  }
+
+  function removeFlexibleGroup(classId, groupId) {
+    const key = String(classId);
+    const groups = getFlexibleGroups(classId);
+    const beforeLength = groups.length;
+    state.flexible[key] = groups.filter(group => group.id !== groupId);
+    if (state.pendingRange && state.pendingRange.groupId === groupId) {
+      state.pendingRange = null;
+    }
+    if (state.flexible[key].length !== beforeLength) {
+      state.rawData.flexible = deepClone(state.flexible);
+      recomputeRemaining();
+      renderPalette();
+      renderGrid();
+      scheduleSave();
+      status.set('Option entfernt.');
+      setTimeout(status.clear, 1200);
+    }
   }
 
   async function moveFixedEntry(fromClassId, toClassId, fromDay, toDay, fromSlot, toSlot, subjectId) {
@@ -552,6 +923,44 @@ export function createBasisplanView() {
     return total;
   }
 
+  function createAssignmentModeToggle() {
+    const wrap = document.createElement('div');
+    wrap.className = 'join';
+
+    const fixedBtn = document.createElement('button');
+    fixedBtn.type = 'button';
+    fixedBtn.className = `btn btn-xs join-item ${state.assignmentMode === 'fixed' ? 'btn-primary' : 'btn-outline'}`;
+    fixedBtn.textContent = 'Fix';
+    fixedBtn.title = 'Fächer fest auf einen Slot legen';
+    fixedBtn.addEventListener('click', () => {
+      if (state.assignmentMode === 'fixed') return;
+      state.assignmentMode = 'fixed';
+      state.pendingRange = null;
+      renderPalette();
+      renderGrid();
+      status.set('Modus: Fixierte Stunden');
+      setTimeout(status.clear, 1200);
+    });
+
+    const rangeBtn = document.createElement('button');
+    rangeBtn.type = 'button';
+    rangeBtn.className = `btn btn-xs join-item ${state.assignmentMode === 'range' ? 'btn-primary' : 'btn-outline'}`;
+    rangeBtn.textContent = 'Option';
+    rangeBtn.title = 'Optionale Slots für einen Bereich hinterlegen';
+    rangeBtn.addEventListener('click', () => {
+      if (state.assignmentMode === 'range') return;
+      state.assignmentMode = 'range';
+      state.pendingRange = null;
+      renderPalette();
+      renderGrid();
+      status.set('Modus: Optionen – Slots per Drag & Drop wählen.');
+      setTimeout(status.clear, 1800);
+    });
+
+    wrap.append(fixedBtn, rangeBtn);
+    return wrap;
+  }
+
   function createCell(content, className = '') {
     const div = document.createElement('div');
     if (className) div.className = className;
@@ -591,13 +1000,19 @@ export function createBasisplanView() {
         meta: { ...(data.meta || DEFAULT_META) },
         windows: data.windows || {},
         fixed: data.fixed || {},
+        flexible: data.flexible || {},
         rooms: data.rooms || {},
         classes: data.classes || {},
       };
+      ensureFlexCounter();
       state.windows = deepClone(state.rawData.windows || {});
       state.fixed = cloneFixed(state.rawData.fixed || {});
+      state.flexible = cloneFlexible(state.rawData.flexible || {});
       state.rawData.windows = deepClone(state.windows);
       state.rawData.fixed = deepClone(state.fixed);
+      state.rawData.flexible = deepClone(state.flexible);
+      state.assignmentMode = 'fixed';
+      state.pendingRange = null;
       ensureBaseWindows();
       recomputeRemaining();
 
@@ -646,17 +1061,36 @@ function formatSubjectLabel(subject) {
 
 function createStatusBar() {
   const element = document.createElement('div');
-  element.className = 'text-sm opacity-70 min-h-[1.5rem]';
+  element.className = 'fixed bottom-6 right-6 z-[100] hidden';
+  element.style.pointerEvents = 'none';
+  document.body.appendChild(element);
+
+  let hideTimer = null;
+
+  function show(message, error = false) {
+    clearTimeout(hideTimer);
+    element.innerHTML = `
+      <div class="alert ${error ? 'alert-error' : 'alert-success'} shadow-lg text-sm w-max max-w-sm">
+        <span>${message || ''}</span>
+      </div>
+    `;
+    element.classList.remove('hidden');
+    hideTimer = setTimeout(() => {
+      element.classList.add('hidden');
+      element.innerHTML = '';
+    }, 2000);
+  }
+
+  function clear() {
+    clearTimeout(hideTimer);
+    element.classList.add('hidden');
+    element.innerHTML = '';
+  }
+
   return {
     element,
-    set(message, error = false) {
-      element.textContent = message || '';
-      element.className = `text-sm ${error ? 'text-error' : 'text-success'} min-h-[1.5rem]`;
-    },
-    clear() {
-      element.textContent = '';
-      element.className = 'text-sm opacity-70 min-h-[1.5rem]';
-    },
+    set: show,
+    clear,
   };
 }
 

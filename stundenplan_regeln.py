@@ -4,7 +4,19 @@ import math
 from ortools.sat.python import cp_model
 
 
-def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln, room_plan=None):
+def add_constraints(
+    model,
+    plan,
+    df,
+    FACH_ID,
+    TAGE,
+    KLASSEN,
+    LEHRER,
+    regeln,
+    room_plan=None,
+    fixed_slots=None,
+    flexible_groups=None,
+):
     """
     Baut alle Constraints und (falls aktiv) Soft-Objectives auf.
 
@@ -318,11 +330,34 @@ def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln, roo
                 model.Add(sum(vormittag) >= 5).OnlyEnforceIf(mittags.Not())
                 model.Add(sum(vormittag) >= 4)
 
-    # -------- 10) Bandfächer (Leseband/Kuba) parallel, 2×/Woche --------
-    if regeln.get("leseband_parallel", True):
-        add_band_constraint(model, plan, df, FACH_ID, TAGE, KLASSEN, band_fach="Leseband", tage=2)
-    if regeln.get("kuba_parallel", True):
-        add_band_constraint(model, plan, df, FACH_ID, TAGE, KLASSEN, band_fach="Kuba", tage=2)
+    # -------- 10) Bandfächer parallel (gleiche Slots je Klasse) --------
+    band_subjects: dict[str, list[int]] = {}
+    if "Bandfach" in df.columns:
+        for fid in FACH_ID:
+            if bool(df.loc[fid].get("Bandfach")):
+                name = str(df.loc[fid, "Fach"]).strip()
+                band_subjects.setdefault(name, []).append(fid)
+
+    for subject_name, band_fids in band_subjects.items():
+        if len(band_fids) != len(KLASSEN):
+            continue  # unvollständige Daten – Constraint überspringen
+        subject_key = subject_name.strip().lower()
+        if subject_key == "leseband" and not regeln.get("leseband_parallel", True):
+            continue
+        if subject_key == "kuba" and not regeln.get("kuba_parallel", True):
+            continue
+        tage_required = min(int(df.loc[fid, "Wochenstunden"]) for fid in band_fids)
+        if tage_required <= 0:
+            continue
+        add_band_constraint(
+            model,
+            plan,
+            df,
+            TAGE,
+            subject_name,
+            band_fids,
+            tage=tage_required,
+        )
 
     # -------- 11) Gleichmäßige Verteilung (Soft) --------
     if regeln.get("gleichverteilung", False) and W_EVEN_DIST > 0:
@@ -351,16 +386,11 @@ def add_constraints(model, plan, df, FACH_ID, TAGE, KLASSEN, LEHRER, regeln, roo
         model.Minimize(sum(obj_terms))
 
 
-def add_band_constraint(model, plan, df, FACH_ID, TAGE, KLASSEN, band_fach, tage=2):
+def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
     """
-    Bandfach (z.B. 'Leseband', 'Kuba') exakt 'tage' mal pro Woche,
+    Bandfach exakt 'tage' mal pro Woche,
     immer parallel in allen Klassen (gleicher Tag+Stunde).
     """
-    band_fids = [fid for fid in FACH_ID
-                 if str(df.loc[fid, "Fach"]).strip().lower() == band_fach.lower()]
-    if len(band_fids) != len(KLASSEN):
-        return  # Daten passen nicht zur Bandlogik
-
     parallel_slots = []
     for tag in TAGE:
         for std in range(8):
@@ -374,3 +404,23 @@ def add_band_constraint(model, plan, df, FACH_ID, TAGE, KLASSEN, band_fach, tage
 
     for fid in band_fids:
         model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) == tage)
+    fixed_slots = fixed_slots or {}
+    flexible_groups = flexible_groups or []
+
+    for fid, slots in fixed_slots.items():
+        for tag, std in slots:
+            if (fid, tag, std) in plan:
+                model.Add(plan[(fid, tag, std)] == 1)
+
+    for entry in flexible_groups:
+        fid = entry.get("fid") if isinstance(entry, dict) else None
+        slots = entry.get("slots") if isinstance(entry, dict) else None
+        if fid is None or not isinstance(slots, list):
+            continue
+        literals = []
+        for tag, std in slots:
+            key = (fid, tag, std)
+            if key in plan:
+                literals.append(plan[key])
+        if literals:
+            model.Add(sum(literals) == 1)

@@ -162,6 +162,21 @@ export function formModal(options = {}) {
         input = document.createElement('textarea');
         input.className = 'textarea textarea-bordered w-full';
         input.rows = field.rows || 3;
+      } else if (field.type === 'select') {
+        input = document.createElement('select');
+        input.className = 'select select-bordered w-full';
+        const opts = Array.isArray(field.options) ? field.options : [];
+        input.innerHTML = opts.map(opt => {
+          if (typeof opt === 'string') {
+            return `<option value="${opt}">${opt}</option>`;
+          }
+          const value = opt.value ?? '';
+          const label = opt.label ?? opt.value ?? '';
+          return `<option value="${value}">${label}</option>`;
+        }).join('');
+        if (field.value !== undefined && field.value !== null) {
+          input.value = String(field.value);
+        }
       } else {
         input = document.createElement('input');
         input.type = field.type || 'text';
@@ -169,7 +184,7 @@ export function formModal(options = {}) {
       }
 
       if (field.placeholder) input.placeholder = field.placeholder;
-      if (field.value !== undefined && field.value !== null) input.value = field.value;
+      if (field.type !== 'select' && field.value !== undefined && field.value !== null) input.value = field.value;
       if (field.required) input.required = true;
       if (field.maxLength) input.maxLength = field.maxLength;
 

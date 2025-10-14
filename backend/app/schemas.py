@@ -68,6 +68,8 @@ class BackupSubject(BaseModel):
     default_doppelstunde: Optional[str] = None
     default_nachmittag: Optional[str] = None
     required_room: Optional[str] = None
+    is_bandfach: Optional[bool] = None
+    is_ag_foerder: Optional[bool] = None
 
 
 class BackupCurriculumItem(BaseModel):
@@ -109,6 +111,8 @@ class BasisPlanData(BaseModel):
     rooms: Dict[str, Any] = Field(default_factory=dict)
     meta: Dict[str, Any] = Field(default_factory=dict)
     windows: Dict[str, Any] = Field(default_factory=dict)
+    fixed: Dict[str, Any] = Field(default_factory=dict)
+    flexible: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         extra = "allow"

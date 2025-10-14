@@ -187,6 +187,8 @@ def create_subject(payload: Subject, session: Session = Depends(get_session)) ->
         required_room_id=payload.required_room_id,
         default_doppelstunde=payload.default_doppelstunde,
         default_nachmittag=payload.default_nachmittag,
+        is_bandfach=bool(payload.is_bandfach),
+        is_ag_foerder=bool(payload.is_ag_foerder),
     )
     session.add(s)
     session.commit()
@@ -215,6 +217,10 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
         s.default_doppelstunde = payload.default_doppelstunde
     if payload.default_nachmittag is not None:
         s.default_nachmittag = payload.default_nachmittag
+    if payload.is_bandfach is not None:
+        s.is_bandfach = bool(payload.is_bandfach)
+    if payload.is_ag_foerder is not None:
+        s.is_ag_foerder = bool(payload.is_ag_foerder)
     session.add(s)
     session.commit()
     session.refresh(s)

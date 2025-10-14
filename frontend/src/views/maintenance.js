@@ -1,9 +1,23 @@
 import { fetchTeachers, updateTeacher, createTeacher, deleteTeacher } from '../api/teachers.js';
 import { fetchClasses, createClass, updateClass, deleteClass } from '../api/classes.js';
 import { fetchRooms, createRoom, updateRoom, deleteRoom } from '../api/rooms.js';
-import { fetchSubjects } from '../api/subjects.js';
+import { fetchSubjects, createSubject, updateSubject, deleteSubject } from '../api/subjects.js';
 import { fetchCurriculum, createCurriculum, updateCurriculum, deleteCurriculum } from '../api/curriculum.js';
 import { confirmModal, formatError } from '../utils/ui.js';
+
+const SUBJECT_DOPPEL_OPTIONS = [
+  { value: '', label: 'Keine Vorgabe' },
+  { value: 'muss', label: 'Doppelstunde muss' },
+  { value: 'kann', label: 'Doppelstunde kann' },
+  { value: 'nein', label: 'Keine Doppelstunde' },
+];
+
+const SUBJECT_NACHMITTAG_OPTIONS = [
+  { value: '', label: 'Keine Vorgabe' },
+  { value: 'muss', label: 'Nachmittag muss' },
+  { value: 'kann', label: 'Nachmittag kann' },
+  { value: 'nein', label: 'Kein Nachmittag' },
+];
 
 export function createDataMaintenanceView() {
   const container = document.createElement('section');
@@ -20,6 +34,7 @@ export function createDataMaintenanceView() {
   const entries = [
     { id: 'teachers', label: 'Lehrer' },
     { id: 'classes', label: 'Klassen' },
+    { id: 'subjects', label: 'Fächer' },
     { id: 'rooms', label: 'Räume' },
     { id: 'curriculum', label: 'Stundentafel' },
   ];
@@ -49,6 +64,7 @@ export function createDataMaintenanceView() {
 
     if (id === 'teachers') activeSection = createTeachersSection();
     if (id === 'classes') activeSection = createClassesSection();
+    if (id === 'subjects') activeSection = createSubjectsSection();
     if (id === 'rooms') activeSection = createRoomsSection();
     if (id === 'curriculum') activeSection = createCurriculumSection();
 
@@ -65,7 +81,6 @@ function createTeachersSection() {
   wrap.className = 'space-y-3';
 
   const status = createStatusBar();
-  wrap.appendChild(status.element);
 
   const table = createTable([
     'Vorname', 'Nachname', 'Kürzel*', 'Deputat Soll*', 'Deputat Ist', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Aktion'
@@ -113,7 +128,12 @@ function createTeachersSection() {
   }
 
   loadTeachers();
-  return { element: wrap };
+  return {
+    element: wrap,
+    destroy() {
+      status.destroy();
+    },
+  };
 }
 
 function teacherInputCell(teacher, field, setStatus, clearStatus, type = 'text') {
@@ -126,10 +146,7 @@ function teacherInputCell(teacher, field, setStatus, clearStatus, type = 'text')
   input.addEventListener('blur', async () => {
     const newValue = normalizeValue(type, input.value);
     if ((teacher[field] ?? '') === newValue) return;
-    const payload = { [field]: newValue };
-    if (['first_name', 'last_name', 'kuerzel'].includes(field)) {
-      payload.name = buildTeacherName({ ...teacher, ...payload });
-    }
+    const payload = buildTeacherUpdatePayload(teacher, { [field]: newValue });
     setStatus('Speichere…');
     try {
       const updated = await updateTeacher(teacher.id, payload);
@@ -151,14 +168,17 @@ function teacherCheckboxCell(teacher, field, setStatus, clearStatus) {
   checkbox.className = 'checkbox checkbox-sm';
   checkbox.checked = !!teacher[field];
   checkbox.addEventListener('change', async () => {
+    const nextValue = checkbox.checked;
     setStatus('Speichere…');
     try {
-      const updated = await updateTeacher(teacher.id, { [field]: checkbox.checked });
+      const payload = buildTeacherUpdatePayload(teacher, { [field]: nextValue });
+      const updated = await updateTeacher(teacher.id, payload);
       Object.assign(teacher, updated);
       setStatus('Gespeichert.');
       setTimeout(clearStatus, 1500);
     } catch (err) {
       setStatus(`Fehler: ${formatError(err)}`, true);
+      checkbox.checked = !!teacher[field];
     }
   });
   const label = document.createElement('label');
@@ -284,7 +304,6 @@ function createClassesSection() {
   wrap.className = 'space-y-3';
 
   const status = createStatusBar();
-  wrap.appendChild(status.element);
 
   const table = createTable(['Name*', 'Klassenlehrer', 'Aktion']);
   wrap.appendChild(table.wrapper);
@@ -375,7 +394,12 @@ function createClassesSection() {
   }
 
   loadClasses();
-  return { element: wrap };
+  return {
+    element: wrap,
+    destroy() {
+      status.destroy();
+    },
+  };
 }
 
 function classActionCell(cls, reload, setStatus, clearStatus) {
@@ -463,13 +487,387 @@ function newClassRow(onRefresh, setStatus, clearStatus, teacherOptions) {
   return tr;
 }
 
+// --- Fächer ---
+function createSubjectsSection() {
+  const wrap = document.createElement('div');
+  wrap.className = 'space-y-3';
+
+  const status = createStatusBar();
+
+  const table = createTable([
+    'Name*',
+    'Kürzel',
+    'Farbe',
+    'Doppelstunde (Std.)',
+    'Nachmittag (Std.)',
+    'Pflichtraum',
+    'Bandfach',
+    'AG/Förder',
+    'Aktion',
+  ]);
+  wrap.appendChild(table.wrapper);
+
+  const state = { subjects: [], rooms: [] };
+  const setStatus = status.set;
+  const clearStatus = status.clear;
+
+  async function loadData() {
+    setStatus('Lade Fächer…');
+    try {
+      const [subjects, rooms] = await Promise.all([
+        fetchSubjects(),
+        fetchRooms(),
+      ]);
+      state.subjects = subjects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      state.rooms = rooms.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      renderRows();
+      setStatus(`${state.subjects.length} Fächer geladen.`);
+      setTimeout(clearStatus, 2000);
+    } catch (err) {
+      setStatus(`Fehler beim Laden: ${formatError(err)}`, true);
+    }
+  }
+
+  function renderRows() {
+    state.subjectsMap = new Map(state.subjects.map(item => [item.id, item]));
+    table.tbody.innerHTML = '';
+    state.subjects.forEach(subject => {
+      const tr = document.createElement('tr');
+      tr.append(
+        subjectInputCell(subject, 'name', setStatus, clearStatus, { required: true }),
+        subjectInputCell(subject, 'kuerzel', setStatus, clearStatus),
+        subjectInputCell(subject, 'color', setStatus, clearStatus),
+        subjectEnumCell(subject, 'default_doppelstunde', SUBJECT_DOPPEL_OPTIONS, setStatus, clearStatus),
+        subjectEnumCell(subject, 'default_nachmittag', SUBJECT_NACHMITTAG_OPTIONS, setStatus, clearStatus),
+        subjectRoomCell(subject, state.rooms, setStatus, clearStatus),
+        subjectBandCheckboxCell(subject, setStatus, clearStatus),
+        subjectAgCheckboxCell(subject, setStatus, clearStatus),
+        subjectActionCell(subject, setStatus, clearStatus, loadData),
+      );
+      table.tbody.appendChild(tr);
+    });
+    table.tbody.appendChild(newSubjectRow(loadData, setStatus, clearStatus, state.rooms));
+  }
+
+  loadData();
+  return {
+    element: wrap,
+    destroy() {
+      status.destroy();
+    },
+  };
+
+  function subjectInputCell(subject, field, setStatusFn, clearStatusFn, opts = {}) {
+    const td = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input input-bordered input-sm w-full';
+    input.value = subject[field] ?? '';
+    if (opts.placeholder) input.placeholder = opts.placeholder;
+    input.addEventListener('blur', async () => {
+      const value = input.value.trim();
+      if (opts.required && !value) {
+        input.value = subject[field] ?? '';
+        return;
+      }
+      if ((subject[field] ?? '') === value) return;
+      const payload = { [field]: value || null };
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, payload);
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        input.value = subject[field] ?? '';
+      }
+    });
+    td.appendChild(input);
+    return td;
+  }
+
+  function subjectEnumCell(subject, field, options, setStatusFn, clearStatusFn) {
+    const td = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'select select-bordered select-sm w-full';
+    select.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    const currentValue = subject[field] || '';
+    select.value = currentValue;
+    select.addEventListener('change', async () => {
+      const selected = select.value || '';
+      const normalized = selected === '' ? null : selected;
+      if ((subject[field] ?? null) === normalized) return;
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, { [field]: normalized });
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        select.value = subject[field] || '';
+      }
+    });
+    td.appendChild(select);
+    return td;
+  }
+
+  function subjectRoomCell(subject, rooms, setStatusFn, clearStatusFn) {
+    const td = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'select select-bordered select-sm w-full';
+    const noneOption = '<option value="">Kein Pflicht-Raum</option>';
+    const roomOptions = rooms.map(room => `<option value="${room.id}">${room.name}</option>`).join('');
+    select.innerHTML = `${noneOption}${roomOptions}`;
+    select.value = subject.required_room_id || '';
+    select.addEventListener('change', async () => {
+      const rawValue = select.value;
+      const normalized = rawValue ? Number(rawValue) : null;
+      if ((subject.required_room_id ?? null) === normalized) return;
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, { required_room_id: normalized });
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        select.value = subject.required_room_id || '';
+      }
+    });
+    td.appendChild(select);
+    return td;
+  }
+
+  function subjectBandCheckboxCell(subject, setStatusFn, clearStatusFn) {
+    const td = document.createElement('td');
+    const label = document.createElement('label');
+    label.className = 'label justify-center cursor-pointer';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'checkbox checkbox-sm';
+    checkbox.checked = !!subject.is_bandfach;
+    checkbox.addEventListener('change', async () => {
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, { is_bandfach: checkbox.checked });
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        checkbox.checked = !!subject.is_bandfach;
+      }
+    });
+    label.appendChild(checkbox);
+    td.appendChild(label);
+    return td;
+  }
+
+  function subjectAgCheckboxCell(subject, setStatusFn, clearStatusFn) {
+    const td = document.createElement('td');
+    const label = document.createElement('label');
+    label.className = 'label justify-center cursor-pointer';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'checkbox checkbox-sm';
+    checkbox.checked = !!subject.is_ag_foerder;
+    checkbox.addEventListener('change', async () => {
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, { is_ag_foerder: checkbox.checked });
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        checkbox.checked = !!subject.is_ag_foerder;
+      }
+    });
+    label.appendChild(checkbox);
+    td.appendChild(label);
+    return td;
+  }
+
+  function subjectActionCell(subject, setStatusFn, clearStatusFn, reloadFn) {
+    const td = document.createElement('td');
+    td.className = 'text-right';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-ghost btn-sm text-error';
+    btn.textContent = 'Löschen';
+    btn.addEventListener('click', async () => {
+      const confirmed = await confirmModal({
+        title: 'Fach löschen',
+        message: `Fach "${subject.name}" wirklich löschen?`,
+        confirmText: 'Löschen',
+      });
+      if (!confirmed) return;
+      setStatusFn('Lösche Fach…');
+      try {
+        await deleteSubject(subject.id);
+        await reloadFn();
+        setStatusFn('Fach gelöscht.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+      }
+    });
+    td.appendChild(btn);
+    return td;
+  }
+
+  function newSubjectRow(onRefresh, setStatusFn, clearStatusFn, rooms) {
+    const tr = document.createElement('tr');
+    tr.className = 'bg-base-200/60';
+
+    const draft = {
+      name: '',
+      kuerzel: '',
+      color: '',
+      default_doppelstunde: '',
+      default_nachmittag: '',
+      required_room_id: null,
+      is_bandfach: false,
+      is_ag_foerder: false,
+    };
+
+    const nameCell = subjectDraftInput('Name*', value => {
+      draft.name = value;
+      updateButtonState();
+    });
+    tr.appendChild(nameCell);
+
+    const kuerzelCell = subjectDraftInput('Kürzel', value => {
+      draft.kuerzel = value;
+    });
+    tr.appendChild(kuerzelCell);
+
+    const colorCell = subjectDraftInput('Farbe', value => {
+      draft.color = value;
+    });
+    tr.appendChild(colorCell);
+
+    const dsCell = document.createElement('td');
+    const dsSelect = document.createElement('select');
+    dsSelect.className = 'select select-bordered select-sm w-full';
+    dsSelect.innerHTML = SUBJECT_DOPPEL_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    dsSelect.addEventListener('change', () => {
+      draft.default_doppelstunde = dsSelect.value;
+    });
+    dsCell.appendChild(dsSelect);
+    tr.appendChild(dsCell);
+
+    const nmCell = document.createElement('td');
+    const nmSelect = document.createElement('select');
+    nmSelect.className = 'select select-bordered select-sm w-full';
+    nmSelect.innerHTML = SUBJECT_NACHMITTAG_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    nmSelect.addEventListener('change', () => {
+      draft.default_nachmittag = nmSelect.value;
+    });
+    nmCell.appendChild(nmSelect);
+    tr.appendChild(nmCell);
+
+    const roomCell = document.createElement('td');
+    const roomSelect = document.createElement('select');
+    roomSelect.className = 'select select-bordered select-sm w-full';
+    const noneOption = '<option value="">Kein Pflicht-Raum</option>';
+    const roomOptions = rooms.map(room => `<option value="${room.id}">${room.name}</option>`).join('');
+    roomSelect.innerHTML = `${noneOption}${roomOptions}`;
+    roomSelect.addEventListener('change', () => {
+      draft.required_room_id = roomSelect.value ? Number(roomSelect.value) : null;
+    });
+    roomCell.appendChild(roomSelect);
+    tr.appendChild(roomCell);
+
+    const bandCell = document.createElement('td');
+    const bandLabel = document.createElement('label');
+    bandLabel.className = 'label justify-center cursor-pointer';
+    const bandCheckbox = document.createElement('input');
+    bandCheckbox.type = 'checkbox';
+    bandCheckbox.className = 'checkbox checkbox-sm';
+    bandCheckbox.addEventListener('change', () => {
+      draft.is_bandfach = bandCheckbox.checked;
+    });
+    bandLabel.appendChild(bandCheckbox);
+    bandCell.appendChild(bandLabel);
+    tr.appendChild(bandCell);
+
+    const agCell = document.createElement('td');
+    const agLabel = document.createElement('label');
+    agLabel.className = 'label justify-center cursor-pointer';
+    const agCheckbox = document.createElement('input');
+    agCheckbox.type = 'checkbox';
+    agCheckbox.className = 'checkbox checkbox-sm';
+    agCheckbox.addEventListener('change', () => {
+      draft.is_ag_foerder = agCheckbox.checked;
+    });
+    agLabel.appendChild(agCheckbox);
+    agCell.appendChild(agLabel);
+    tr.appendChild(agCell);
+
+    const actionCell = document.createElement('td');
+    actionCell.className = 'text-right';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-primary btn-sm';
+    addBtn.textContent = 'Anlegen';
+    addBtn.disabled = true;
+    addBtn.addEventListener('click', async () => {
+      addBtn.disabled = true;
+      setStatusFn('Fach wird angelegt…');
+      try {
+        const payload = {
+          name: draft.name,
+          kuerzel: draft.kuerzel || null,
+          color: draft.color || null,
+          default_doppelstunde: draft.default_doppelstunde || null,
+          default_nachmittag: draft.default_nachmittag || null,
+          required_room_id: draft.required_room_id,
+          is_bandfach: draft.is_bandfach,
+          is_ag_foerder: draft.is_ag_foerder,
+        };
+        const created = await createSubject(payload);
+        state.subjects.push(created);
+        state.subjects.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        renderRows();
+        setStatusFn('Fach angelegt.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+      } finally {
+        addBtn.disabled = false;
+      }
+    });
+    actionCell.appendChild(addBtn);
+    tr.appendChild(actionCell);
+
+    function updateButtonState() {
+      addBtn.disabled = !(draft.name && draft.name.length >= 1);
+    }
+
+    return tr;
+  }
+
+  function subjectDraftInput(placeholder, onChange) {
+    const td = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = placeholder;
+    input.className = 'input input-bordered input-sm w-full';
+    input.addEventListener('input', () => {
+      onChange(input.value.trim());
+    });
+    td.appendChild(input);
+    return td;
+  }
+}
+
 // --- Räume ---
 function createRoomsSection() {
   const wrap = document.createElement('div');
   wrap.className = 'space-y-3';
 
   const status = createStatusBar();
-  wrap.appendChild(status.element);
 
   const table = createTable(['Name*', 'Typ', 'Kapazität', 'Klassenraum', 'Aktion']);
   wrap.appendChild(table.wrapper);
@@ -507,7 +905,12 @@ function createRoomsSection() {
   }
 
   loadRooms();
-  return { element: wrap };
+  return {
+    element: wrap,
+    destroy() {
+      status.destroy();
+    },
+  };
 }
 
 function roomNameCell(room, setStatus, clearStatus, rerender) {
@@ -758,7 +1161,6 @@ function createCurriculumSection() {
   wrap.className = 'space-y-3';
 
   const status = createStatusBar();
-  wrap.appendChild(status.element);
 
   const table = createTable([]);
   wrap.appendChild(table.wrapper);
@@ -766,11 +1168,35 @@ function createCurriculumSection() {
   const state = {
     classes: [],
     subjects: [],
+    subjectsMap: new Map(),
     entries: new Map(),
   };
 
   const setStatus = status.set;
   const clearStatus = status.clear;
+
+  function classTotal(classId) {
+    let total = 0;
+    const subjectsMap = state.subjectsMap || new Map();
+    state.entries.forEach(entry => {
+      if (entry?.class_id === classId) {
+        const subject = subjectsMap.get(entry.subject_id);
+        if (subject?.is_ag_foerder) {
+          return;
+        }
+        total += entry.wochenstunden || 0;
+      }
+    });
+    return total;
+  }
+
+  function updateClassTotalDisplay(classId) {
+    if (classId == null) return;
+    const selector = `[data-class-total="${String(classId)}"]`;
+    const badge = table.wrapper.querySelector(selector);
+    if (!badge) return;
+    badge.textContent = `${classTotal(classId)} h`;
+  }
 
   async function loadData() {
     setStatus('Lade Stundentafel…');
@@ -782,6 +1208,7 @@ function createCurriculumSection() {
       ]);
       state.classes = classes.sort((a, b) => a.name.localeCompare(b.name));
       state.subjects = subjects.sort((a, b) => a.name.localeCompare(b.name));
+      state.subjectsMap = new Map(state.subjects.map(sub => [sub.id, sub]));
       state.entries = new Map(curriculum.map(entry => [`${entry.class_id}|${entry.subject_id}`, entry]));
       renderTable();
       setStatus('Stundentafel geladen.');
@@ -796,9 +1223,36 @@ function createCurriculumSection() {
     table.tbody.innerHTML = '';
 
     const headerRow = document.createElement('tr');
-    headerRow.className = 'text-xs uppercase opacity-60';
-    headerRow.appendChild(createHeaderCell('Fach'));
-    state.classes.forEach(cls => headerRow.appendChild(createHeaderCell(cls.name)));
+    headerRow.className = 'align-bottom';
+
+    const subjectHeader = document.createElement('th');
+    subjectHeader.className = 'align-bottom';
+    const subjectLabel = document.createElement('span');
+    subjectLabel.className = 'text-xs uppercase opacity-60';
+    subjectLabel.textContent = 'Fach';
+    subjectHeader.appendChild(subjectLabel);
+    headerRow.appendChild(subjectHeader);
+
+    state.classes.forEach(cls => {
+      const th = document.createElement('th');
+      th.className = 'align-bottom';
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'flex flex-col gap-2 items-stretch text-left';
+
+      const totalBadge = document.createElement('span');
+      totalBadge.className = 'badge badge-neutral badge-sm self-start';
+      totalBadge.dataset.classTotal = String(cls.id);
+      totalBadge.textContent = `${classTotal(cls.id)} h`;
+
+      const label = document.createElement('span');
+      label.className = 'text-xs uppercase opacity-60';
+      label.textContent = cls.name;
+
+      wrapper.append(totalBadge, label);
+      th.appendChild(wrapper);
+      headerRow.appendChild(th);
+    });
     table.thead.appendChild(headerRow);
 
     state.subjects.forEach(sub => {
@@ -899,6 +1353,7 @@ function createCurriculumSection() {
         state.entries.set(key, updated);
         if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
         setStatus('Aktualisiert.');
+        updateClassTotalDisplay(updated?.class_id ?? current.class_id);
         setTimeout(clearStatus, 1500);
       } catch (err) {
         setStatus(`Fehler: ${formatError(err)}`, true);
@@ -912,6 +1367,7 @@ function createCurriculumSection() {
         state.entries.set(key, created);
         if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
         setStatus('Eintrag angelegt.');
+        updateClassTotalDisplay(classId);
         setTimeout(clearStatus, 1500);
       } catch (err) {
         setStatus(`Fehler: ${formatError(err)}`, true);
@@ -934,6 +1390,7 @@ function createCurriculumSection() {
       if (controls?.input) controls.input.value = '';
       if (controls?.deleteBtn) controls.deleteBtn.disabled = true;
       setStatus('Eintrag gelöscht.');
+      updateClassTotalDisplay(current.class_id);
       setTimeout(clearStatus, 1500);
     } catch (err) {
       setStatus(`Fehler: ${formatError(err)}`, true);
@@ -943,23 +1400,55 @@ function createCurriculumSection() {
   }
 
   loadData();
-  return { element: wrap };
+  return {
+    element: wrap,
+    destroy() {
+      status.destroy();
+    },
+  };
 }
 
 // --- Helper ---
 function createStatusBar() {
   const element = document.createElement('div');
-  element.className = 'text-sm opacity-70 min-h-[1.5rem]';
+  element.className = 'fixed bottom-6 right-6 z-[95] hidden';
+  element.style.pointerEvents = 'none';
+  document.body.appendChild(element);
+
+  let hideTimer = null;
+
+  function show(message, error = false) {
+    clearTimeout(hideTimer);
+    element.innerHTML = `
+      <div class="alert ${error ? 'alert-error' : 'alert-success'} shadow-lg text-sm w-max max-w-sm">
+        <span>${message || ''}</span>
+      </div>
+    `;
+    element.classList.remove('hidden');
+    hideTimer = setTimeout(() => {
+      element.classList.add('hidden');
+      element.innerHTML = '';
+    }, 2000);
+  }
+
+  function clear() {
+    clearTimeout(hideTimer);
+    element.classList.add('hidden');
+    element.innerHTML = '';
+  }
+
+  function destroy() {
+    clearTimeout(hideTimer);
+    if (element.parentElement) {
+      element.parentElement.removeChild(element);
+    }
+  }
+
   return {
     element,
-    set(message, error = false) {
-      element.textContent = message || '';
-      element.className = `text-sm ${error ? 'text-error' : 'text-success'} min-h-[1.5rem]`;
-    },
-    clear() {
-      element.textContent = '';
-      element.className = 'text-sm opacity-70 min-h-[1.5rem]';
-    },
+    set: show,
+    clear,
+    destroy,
   };
 }
 
@@ -1006,6 +1495,25 @@ function buildTeacherName(teacher) {
   const last = teacher.last_name ? String(teacher.last_name).trim() : '';
   const full = `${first} ${last}`.trim();
   return full || teacher.kuerzel || teacher.name || '';
+}
+
+function buildTeacherUpdatePayload(teacher, overrides = {}) {
+  const base = {
+    first_name: teacher.first_name ?? null,
+    last_name: teacher.last_name ?? null,
+    kuerzel: teacher.kuerzel ?? null,
+    deputat_soll: typeof teacher.deputat_soll === 'number' ? teacher.deputat_soll : null,
+    deputat: typeof teacher.deputat === 'number' ? teacher.deputat : null,
+    work_mo: teacher.work_mo ?? true,
+    work_di: teacher.work_di ?? true,
+    work_mi: teacher.work_mi ?? true,
+    work_do: teacher.work_do ?? true,
+    work_fr: teacher.work_fr ?? true,
+  };
+  const merged = { ...base, ...overrides };
+  const nameSource = { ...teacher, ...merged };
+  merged.name = buildTeacherName(nameSource);
+  return merged;
 }
 
 function buildCreateTeacher(draft) {
