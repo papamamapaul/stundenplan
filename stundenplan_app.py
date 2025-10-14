@@ -20,15 +20,21 @@ default_path = "stundenverteilung.xlsx"
 # ---------------- Sidebar: Regeln ----------------
 st.sidebar.header("Regeln")
 regeln = {
+    "stundenbedarf_vollstaendig": st.sidebar.checkbox("Alle Requirements vollständig planen", value=True),
+    "keine_lehrerkonflikte": st.sidebar.checkbox("Lehrkräfte nicht doppelt belegen", value=True),
+    "keine_klassenkonflikte": st.sidebar.checkbox("Klassen nicht doppelt belegen", value=True),
+    "raum_verfuegbarkeit": st.sidebar.checkbox("Raumverfügbarkeiten nutzen", value=True),
+    "basisplan_fixed": st.sidebar.checkbox("Feste Basisplan-Slots erzwingen", value=True),
+    "basisplan_flexible": st.sidebar.checkbox("Flexible Basisplan-Slots nutzen", value=True),
     "stundenbegrenzung": st.sidebar.checkbox("Max. 6/5 Stunden je Tag/Freitag", value=True),
+    "stundenbegrenzung_erste_stunde": st.sidebar.checkbox("Bei vollem Tag 1. Stunde belegen", value=True),
+    "nachmittag_regel": st.sidebar.checkbox("Nachmittagsunterricht nur Dienstag", value=True),
+    "fach_nachmittag_regeln": st.sidebar.checkbox("Fachspezifische Nachmittag-Regeln", value=True),
     "keine_hohlstunden": st.sidebar.checkbox("Keine Hohlstunden (Soft: Lücken minimieren)", value=True),
     "keine_hohlstunden_hard": st.sidebar.checkbox("Keine Hohlstunden (Hard, konvexer Block)", value=False),
-    "nachmittag_regel": st.sidebar.checkbox("Nachmittagsunterricht nur Dienstag", value=True),
-    "klassenlehrerstunde_fix": st.sidebar.checkbox("KL-Stunde fix (Fr, 5. Stunde)", value=True),
     "doppelstundenregel": st.sidebar.checkbox("Doppelstundenregel (muss/kann/nein + max. 2 in Folge)", value=True),
     "einzelstunde_nur_rand": st.sidebar.checkbox("Einzelstunde nur an Randstunden (für 'muss' ungerade)", value=True),
-    "leseband_parallel": st.sidebar.checkbox("Leseband parallel in allen Klassen (2×/Woche)", value=True),
-    "kuba_parallel": st.sidebar.checkbox("Kuba (Kunstband) parallel (2×/Woche)", value=True),
+    "bandstunden_parallel": st.sidebar.checkbox("Bandfächer parallel planen", value=True),
     "gleichverteilung": st.sidebar.checkbox("Gleichmäßige Verteilung über die Woche (Soft)", value=True),
     "mittagsschule_vormittag": st.sidebar.checkbox("Vormittagsregel bei Mittagsschule (4 / ≥5)", value=True),
 }

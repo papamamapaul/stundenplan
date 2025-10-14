@@ -13,6 +13,7 @@ export async function generatePlan(payload) {
   }
   if (cleaned.version_id == null) delete cleaned.version_id;
   if (cleaned.rule_profile_id == null) delete cleaned.rule_profile_id;
+  if (!cleaned.dry_run) delete cleaned.dry_run;
   if (cleaned.comment != null) {
     cleaned.comment = cleaned.comment.trim();
     if (!cleaned.comment.length) delete cleaned.comment;

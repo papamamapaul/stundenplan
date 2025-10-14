@@ -224,8 +224,8 @@ function newTeacherRow(onRefresh, setStatus, clearStatus) {
     first_name: '',
     last_name: '',
     kuerzel: '',
-    deputat_soll: '',
-    deputat: '',
+    deputat_soll: null,
+    deputat: null,
     work_mo: true,
     work_di: true,
     work_mi: true,
@@ -234,6 +234,7 @@ function newTeacherRow(onRefresh, setStatus, clearStatus) {
   };
 
   const fields = ['first_name', 'last_name', 'kuerzel', 'deputat_soll', 'deputat'];
+  const inputRefs = {};
   fields.forEach(field => {
     const td = document.createElement('td');
     const input = document.createElement('input');
@@ -241,8 +242,19 @@ function newTeacherRow(onRefresh, setStatus, clearStatus) {
     input.min = '0';
     input.className = 'input input-bordered input-sm w-full';
     input.placeholder = field === 'kuerzel' ? 'Kürzel*' : '';
+    inputRefs[field] = input;
     input.addEventListener('input', () => {
-      draft[field] = normalizeValue(input.type, input.value);
+      const newValue = normalizeValue(input.type, input.value);
+      draft[field] = newValue;
+      if (
+        field === 'deputat_soll'
+        && (draft.deputat === null || draft.deputat === '' || Number.isNaN(draft.deputat))
+      ) {
+        draft.deputat = newValue;
+        if (inputRefs.deputat && inputRefs.deputat !== input) {
+          inputRefs.deputat.value = input.value;
+        }
+      }
       updateButtonState();
     });
     td.appendChild(input);
@@ -290,10 +302,13 @@ function newTeacherRow(onRefresh, setStatus, clearStatus) {
   tr.appendChild(actionCell);
 
   function updateButtonState() {
-    const hasKuerzel = draft.kuerzel && draft.kuerzel.toString().trim().length >= 2;
-    const hasDeputat = draft.deputat_soll !== '' && !Number.isNaN(Number(draft.deputat_soll));
-    addBtn.disabled = !(hasKuerzel && hasDeputat);
+    const hasKuerzel = typeof draft.kuerzel === 'string' && draft.kuerzel.trim().length >= 1;
+    const hasDeputatSoll = Number.isFinite(draft.deputat_soll);
+    const hasDeputat = Number.isFinite(draft.deputat);
+    addBtn.disabled = !(hasKuerzel && (hasDeputat || hasDeputatSoll));
   }
+
+  updateButtonState();
 
   return tr;
 }
@@ -1517,12 +1532,14 @@ function buildTeacherUpdatePayload(teacher, overrides = {}) {
 }
 
 function buildCreateTeacher(draft) {
+  const deputatSollValue = Number.isFinite(draft.deputat_soll) ? Number(draft.deputat_soll) : null;
+  const deputatValue = Number.isFinite(draft.deputat) ? Number(draft.deputat) : deputatSollValue;
   return {
     first_name: draft.first_name?.trim() || null,
     last_name: draft.last_name?.trim() || null,
     kuerzel: draft.kuerzel?.trim(),
-    deputat_soll: draft.deputat_soll !== '' ? Number(draft.deputat_soll) : null,
-    deputat: draft.deputat !== '' ? Number(draft.deputat) : null,
+    deputat_soll: deputatSollValue,
+    deputat: deputatValue,
     work_mo: draft.work_mo,
     work_di: draft.work_di,
     work_mi: draft.work_mi,

@@ -9,6 +9,13 @@ import { createTabs } from '../components/Tabs.js';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 const STUNDEN = Array.from({ length: 8 }, (_, idx) => idx + 1);
+const DAY_LABELS = {
+  Mo: 'Montag',
+  Di: 'Dienstag',
+  Mi: 'Mittwoch',
+  Do: 'Donnerstag',
+  Fr: 'Freitag',
+};
 const DEFAULT_PARAMS = {
   multi_start: true,
   max_attempts: 10,
@@ -69,8 +76,40 @@ export function createPlanView() {
 
   tabContent.append(resultsSection, analysisSection);
 
+  const debugCard = document.createElement('article');
+  debugCard.className = 'card bg-base-100 shadow-sm border border-dashed border-base-300';
+  const debugBody = document.createElement('div');
+  debugBody.className = 'card-body space-y-4';
+  const debugHeader = document.createElement('div');
+  debugHeader.className = 'flex items-start justify-between gap-3';
+  const debugTitleWrap = document.createElement('div');
+  debugTitleWrap.className = 'space-y-1';
+  const debugTitle = document.createElement('h2');
+  debugTitle.className = 'text-lg font-semibold';
+  debugTitle.textContent = 'Solver-Diagnose';
+  const debugText = document.createElement('p');
+  debugText.className = 'text-xs opacity-70 max-w-xl';
+  debugText.textContent = 'Starte Trockenläufe, um zu prüfen, welche Regel-Kombination eine Lösung verhindert. Jeder Lauf nutzt die aktuelle Stundenverteilung und speichert keinen Plan.';
+  debugTitleWrap.append(debugTitle, debugText);
+
+  const debugButton = document.createElement('button');
+  debugButton.type = 'button';
+  debugButton.className = 'btn btn-sm btn-outline';
+  debugButton.textContent = 'Regel-Check starten';
+  debugHeader.append(debugTitleWrap, debugButton);
+
+  const debugStatus = document.createElement('p');
+  debugStatus.className = 'text-xs opacity-70';
+  debugStatus.textContent = 'Noch kein Debug-Lauf gestartet.';
+
+  const debugResults = document.createElement('div');
+  debugResults.className = 'overflow-x-auto';
+
+  debugBody.append(debugHeader, debugStatus, debugResults);
+  debugCard.append(debugBody);
+
   controlsWrap.append(planCard, rulesSummaryCard);
-  container.append(header, statusBar.element, controlsWrap, tabs.nav, tabContent);
+  container.append(header, statusBar.element, controlsWrap, debugCard, tabs.nav, tabContent);
 
   const state = {
     loading: false,
@@ -98,6 +137,10 @@ export function createPlanView() {
     analysis: null,
     analysisError: null,
     activeTab: 'results',
+    debugRuns: [],
+    debugRunning: false,
+    debugStale: true,
+    visibleClasses: new Set(),
   };
 
   const planNameInput = document.createElement('input');
@@ -191,6 +234,7 @@ export function createPlanView() {
     loadAnalysis().then(renderAnalysis).catch(() => {});
     syncParamControls();
     updateRulesSummary();
+    markDebugStale();
   });
 
   ruleProfileSelect.addEventListener('change', () => {
@@ -199,6 +243,7 @@ export function createPlanView() {
     applyRuleProfile();
     syncRuleControls();
     updateRulesSummary();
+    markDebugStale();
   });
 
   generateButton.addEventListener('click', async () => {
@@ -246,6 +291,11 @@ export function createPlanView() {
     closeRulesModal();
   });
 
+  debugButton.addEventListener('click', async () => {
+    if (state.debugRunning) return;
+    await runRuleDiagnostics();
+  });
+
   initialize().catch(err => {
     statusBar.set(`Fehler beim Laden: ${formatError(err)}`, true);
   });
@@ -269,6 +319,7 @@ export function createPlanView() {
       state.subjects = new Map(subjects.map(sub => [sub.id, sub]));
       state.classes = new Map(classes.map(cls => [cls.id, cls]));
       state.teachers = new Map(teachers.map(t => [t.id, t]));
+      state.visibleClasses = new Set(classes.map(cls => cls.id));
 
       planNameInput.value = state.planName;
       commentInput.value = state.planComment;
@@ -281,6 +332,7 @@ export function createPlanView() {
       renderResults();
       await loadAnalysis();
       renderAnalysis();
+      renderDebugResults();
       statusBar.set('Daten geladen.');
       setTimeout(statusBar.clear, 1200);
     } catch (err) {
@@ -368,6 +420,12 @@ export function createPlanView() {
           state.ruleValuesBools.set(rule.key, value);
         }
       });
+      const hasBandToggle = state.rulesDefinition.bools.some(rule => rule.key === 'bandstunden_parallel');
+      if (hasBandToggle && profile.leseband_parallel !== undefined && !state.ruleValuesBools.has('bandstunden_parallel')) {
+        const value = !!profile.leseband_parallel;
+        state.ruleBaseBools.set('bandstunden_parallel', value);
+        state.ruleValuesBools.set('bandstunden_parallel', value);
+      }
       state.rulesDefinition.weights.forEach(rule => {
         if (profile[rule.key] !== undefined) {
           const value = Number(profile[rule.key]);
@@ -402,6 +460,7 @@ export function createPlanView() {
       toggle.addEventListener('change', () => {
         state.ruleValuesBools.set(rule.key, toggle.checked);
         updateRulesSummary();
+        markDebugStale();
       });
       row.append(info, toggle);
       boolsContainer.appendChild(row);
@@ -437,6 +496,7 @@ export function createPlanView() {
         number.value = String(value);
         updateWeightLabel(rule.key, value);
         updateRulesSummary();
+        markDebugStale();
       });
 
       number.addEventListener('change', () => {
@@ -448,6 +508,7 @@ export function createPlanView() {
         number.value = String(value);
         updateWeightLabel(rule.key, value);
         updateRulesSummary();
+        markDebugStale();
       });
 
       wrap.append(label, range, number);
@@ -567,6 +628,193 @@ export function createPlanView() {
     }
   }
 
+  async function runRuleDiagnostics() {
+    if (!state.selectedVersionId) {
+      statusBar.set('Bitte wähle zuerst eine Stundenverteilung für den Debug-Lauf aus.', true);
+      return;
+    }
+    if (state.debugRunning) return;
+
+    state.debugRunning = true;
+    state.debugStale = false;
+    debugButton.disabled = true;
+    debugStatus.textContent = 'Starte Debug-Läufe…';
+
+    const runs = [];
+    renderDebugResults([]);
+
+    const ruleSnapshot = collectRuleSnapshot();
+    const boolDefs = state.rulesDefinition?.bools || [];
+
+    const baseline = await executeDryRun(
+      'baseline',
+      'Aktuelle Regeln',
+      ruleSnapshot,
+      'Aktuelle Einstellungen'
+    );
+    runs.push(baseline);
+
+    for (const rule of boolDefs) {
+      const currentValue = !!ruleSnapshot[rule.key];
+      if (!currentValue) continue;
+      const toggledRules = { ...ruleSnapshot, [rule.key]: false };
+      const label = `${rule.label || rule.key} deaktiviert`;
+      const result = await executeDryRun(
+        rule.key,
+        label,
+        toggledRules,
+        `${rule.label || rule.key} deaktiviert`
+      );
+      runs.push(result);
+    }
+
+    state.debugRuns = runs;
+    renderDebugResults(runs);
+
+    const failures = runs.filter(run => !run.success).length;
+    if (failures) {
+      debugStatus.textContent = `${runs.length} Debug-Läufe abgeschlossen – ${failures} ohne Lösung.`;
+    } else {
+      debugStatus.textContent = `${runs.length} Debug-Läufe abgeschlossen.`;
+    }
+
+    debugButton.disabled = false;
+    state.debugRunning = false;
+  }
+
+  async function executeDryRun(key, label, ruleValues, changeSummary) {
+    const payload = {
+      name: `${state.planName || 'Plan'} • Debug`,
+      comment: null,
+      version_id: state.selectedVersionId,
+      rule_profile_id: state.selectedRuleProfileId,
+      override_rules: { ...ruleValues },
+      params: { ...state.params },
+      dry_run: true,
+    };
+    const start = performance.now();
+    try {
+      const response = await generatePlan(payload);
+      const duration = performance.now() - start;
+      return {
+        key,
+        label,
+        change: changeSummary,
+        success: true,
+        status: response.status,
+        score: response.score,
+        duration,
+      };
+    } catch (err) {
+      const duration = performance.now() - start;
+      return {
+        key,
+        label,
+        change: changeSummary,
+        success: false,
+        status: 'FAILED',
+        score: null,
+        duration,
+        error: formatError(err),
+      };
+    }
+  }
+
+  function collectRuleSnapshot() {
+    const snapshot = {};
+    if (!state.rulesDefinition) return snapshot;
+    state.rulesDefinition.bools.forEach(rule => {
+      const current = state.ruleValuesBools.get(rule.key);
+      snapshot[rule.key] = current !== undefined ? !!current : !!rule.default;
+    });
+    state.rulesDefinition.weights.forEach(rule => {
+      const current = state.ruleValuesWeights.get(rule.key);
+      snapshot[rule.key] = current !== undefined ? Number(current) : Number(rule.default ?? 0);
+    });
+    return snapshot;
+  }
+
+  function renderDebugResults(runs = state.debugRuns) {
+    debugResults.innerHTML = '';
+    if (!runs || !runs.length) {
+      const note = document.createElement('p');
+      note.className = 'text-sm opacity-60';
+      note.textContent = state.debugRunning ? 'Debug-Läufe laufen…' : 'Noch keine Debug-Läufe durchgeführt.';
+      debugResults.appendChild(note);
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'table table-sm';
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Szenario', 'Status', 'Score', 'Dauer', 'Änderung', 'Hinweis'].forEach(title => {
+      const th = document.createElement('th');
+      th.textContent = title;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    runs.forEach(run => {
+      const tr = document.createElement('tr');
+
+      const tdScenario = document.createElement('td');
+      tdScenario.textContent = run.label;
+      tr.appendChild(tdScenario);
+
+      const tdStatus = document.createElement('td');
+      tdStatus.textContent = run.status;
+      tdStatus.className = run.success ? 'text-success' : 'text-error';
+      tr.appendChild(tdStatus);
+
+      const tdScore = document.createElement('td');
+      tdScore.textContent = run.score != null ? run.score.toFixed(2) : '—';
+      tr.appendChild(tdScore);
+
+      const tdDuration = document.createElement('td');
+      tdDuration.textContent = formatDuration(run.duration);
+      tr.appendChild(tdDuration);
+
+      const tdChange = document.createElement('td');
+      tdChange.textContent = run.change || '—';
+      tr.appendChild(tdChange);
+
+      const tdHint = document.createElement('td');
+      tdHint.textContent = run.error || (run.success ? 'OK' : 'Fehler');
+      if (!run.success && !run.error) {
+        tdHint.textContent = 'Keine Lösung';
+      }
+      tr.appendChild(tdHint);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    debugResults.appendChild(table);
+  }
+
+  function markDebugStale() {
+    if (state.debugRunning) return;
+    state.debugStale = true;
+    if (state.debugRuns.length) {
+      debugStatus.textContent = 'Einstellungen geändert – Debug erneut starten.';
+    } else {
+      debugStatus.textContent = 'Noch kein Debug-Lauf gestartet.';
+    }
+  }
+
+  function formatDuration(ms) {
+    if (!Number.isFinite(ms)) return '—';
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    const seconds = ms / 1000;
+    if (seconds < 10) return `${seconds.toFixed(2)} s`;
+    if (seconds < 60) return `${seconds.toFixed(1)} s`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return `${minutes} min ${rest.toFixed(1)} s`;
+  }
+
   function buildOverrides() {
     const overrides = {};
     state.ruleValuesBools.forEach((value, key) => {
@@ -603,6 +851,15 @@ export function createPlanView() {
       empty.textContent = 'Noch kein Plan berechnet.';
       resultsSection.appendChild(empty);
       return;
+    }
+
+    if (!state.visibleClasses || !state.visibleClasses.size) {
+      state.visibleClasses = new Set(Array.from(state.classes.keys()));
+    }
+
+    const filterBar = createClassFilterBar();
+    if (filterBar) {
+      resultsSection.appendChild(filterBar);
     }
 
     state.generatedPlans.forEach(entry => {
@@ -642,7 +899,7 @@ export function createPlanView() {
       headerRow.append(titleWrap, badges);
       body.appendChild(headerRow);
 
-      body.appendChild(renderPlanMatrix(entry.slots));
+      body.appendChild(renderPlanGrid(entry));
 
       card.appendChild(body);
       resultsSection.appendChild(card);
@@ -903,6 +1160,7 @@ export function createPlanView() {
     toggle.checked = !!state.params[key];
     toggle.addEventListener('change', () => {
       state.params[key] = toggle.checked;
+      markDebugStale();
     });
     row.append(info, toggle);
     state.paramInputs.set(key, { type: 'checkbox', element: toggle });
@@ -937,92 +1195,229 @@ export function createPlanView() {
       }
       state.params[key] = value;
       input.value = String(value);
+      markDebugStale();
     });
     row.append(heading, sub, input);
     state.paramInputs.set(key, { type: 'number', element: input });
     return row;
   }
 
-  function renderPlanMatrix(slots) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'space-y-4';
-    const grouped = new Map();
-    slots.forEach(slot => {
-      const classGroup = grouped.get(slot.class_id) || new Map();
-      const tagMap = classGroup.get(slot.tag) || new Map();
-      tagMap.set(slot.stunde, slot);
-      classGroup.set(slot.tag, tagMap);
-      grouped.set(slot.class_id, classGroup);
+  function createClassFilterBar() {
+    if (!state.classes.size) return null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'flex flex-wrap items-center gap-3 mb-4';
+
+    const label = document.createElement('span');
+    label.className = 'text-sm font-semibold';
+    label.textContent = 'Klassenansicht:';
+    wrap.appendChild(label);
+
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'btn btn-xs btn-outline';
+    allBtn.textContent = 'Alle';
+    allBtn.disabled = state.visibleClasses.size === state.classes.size;
+    allBtn.addEventListener('click', () => {
+      state.visibleClasses = new Set(state.classes.keys());
+      renderResults();
     });
+    wrap.appendChild(allBtn);
 
-    const classIds = Array.from(grouped.keys()).sort((a, b) => {
-      const classA = state.classes.get(a)?.name || '';
-      const classB = state.classes.get(b)?.name || '';
-      return classA.localeCompare(classB);
-    });
+    state.classes.forEach((cls, classId) => {
+      const option = document.createElement('label');
+      option.className = 'flex items-center gap-2 px-3 py-1 rounded-lg border border-base-300 bg-base-100 text-sm';
 
-    classIds.forEach(classId => {
-      const classCard = document.createElement('div');
-      classCard.className = 'space-y-2';
-      const heading = document.createElement('h4');
-      heading.className = 'font-semibold text-sm';
-      heading.textContent = state.classes.get(classId)?.name || `Klasse #${classId}`;
-      classCard.appendChild(heading);
-
-      const table = document.createElement('table');
-      table.className = 'table table-compact w-full';
-      const thead = document.createElement('thead');
-      const headRow = document.createElement('tr');
-      const emptyCell = document.createElement('th');
-      emptyCell.textContent = 'Std';
-      headRow.appendChild(emptyCell);
-      DAYS.forEach(day => {
-        const th = document.createElement('th');
-        th.textContent = day;
-        headRow.appendChild(th);
-      });
-      thead.appendChild(headRow);
-      table.appendChild(thead);
-
-      const tbody = document.createElement('tbody');
-      const classMap = grouped.get(classId) || new Map();
-      STUNDEN.forEach(stunde => {
-        const row = document.createElement('tr');
-        const labelCell = document.createElement('td');
-        labelCell.className = 'font-semibold text-xs opacity-70';
-        labelCell.textContent = `${stunde}.`;
-        row.appendChild(labelCell);
-        DAYS.forEach(day => {
-          const cell = document.createElement('td');
-          cell.className = 'text-xs align-top';
-          const slot = classMap.get(day)?.get(stunde);
-          if (slot) {
-            const subject = state.subjects.get(slot.subject_id);
-            const teacher = state.teachers.get(slot.teacher_id);
-            cell.innerHTML = `
-              <div class="font-medium">${subject?.kuerzel || subject?.name || `Fach #${slot.subject_id}`}</div>
-              <div class="opacity-70">${teacher?.kuerzel || teacher?.name || ''}</div>
-            `;
-          } else {
-            cell.innerHTML = '<span class="opacity-30">—</span>';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'checkbox checkbox-xs';
+      checkbox.checked = state.visibleClasses.has(classId);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          state.visibleClasses.add(classId);
+        } else {
+          state.visibleClasses.delete(classId);
+          if (!state.visibleClasses.size) {
+            state.visibleClasses.add(classId);
           }
-          row.appendChild(cell);
-        });
-        tbody.appendChild(row);
+        }
+        renderResults();
       });
-      table.appendChild(tbody);
-      classCard.appendChild(table);
-      wrapper.appendChild(classCard);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = getClassName(classId);
+
+      option.append(checkbox, nameSpan);
+      wrap.appendChild(option);
     });
 
-    if (!classIds.length) {
+    return wrap;
+  }
+
+  function renderPlanGrid(planEntry) {
+    const selectedClassIds = Array.from(
+      state.visibleClasses && state.visibleClasses.size
+        ? state.visibleClasses
+        : state.classes.keys(),
+    );
+
+    if (!selectedClassIds.length) {
       const info = document.createElement('p');
       info.className = 'text-sm opacity-70';
-      info.textContent = 'Keine belegten Slots vorhanden.';
-      wrapper.appendChild(info);
+      info.textContent = 'Keine Klassen ausgewählt.';
+      return info;
     }
 
+    const orderedClassIds = selectedClassIds.sort((a, b) => getClassName(a).localeCompare(getClassName(b)));
+
+    const slotMap = new Map();
+    planEntry.slots.forEach(slot => {
+      slotMap.set(`${slot.tag}-${slot.class_id}-${slot.stunde}`, slot);
+    });
+
+    const maxPeriod = planEntry.slots.length
+      ? Math.max(...planEntry.slots.map(slot => Number(slot.stunde)))
+      : STUNDEN.length;
+    const periods = Array.from({ length: Math.max(maxPeriod, STUNDEN.length) }, (_, idx) => idx + 1);
+
+    const table = document.createElement('table');
+    table.className = 'w-full border-collapse text-sm';
+
+    const thead = document.createElement('thead');
+    const dayRow = document.createElement('tr');
+    const timeHeader = document.createElement('th');
+    timeHeader.rowSpan = 2;
+    timeHeader.className = 'bg-base-200 text-left uppercase text-xs tracking-wide px-4 py-3 border border-base-300 min-w-[90px]';
+    timeHeader.textContent = 'Zeit';
+    dayRow.appendChild(timeHeader);
+
+    DAYS.forEach(day => {
+      const th = document.createElement('th');
+      th.colSpan = orderedClassIds.length;
+      th.className = 'bg-base-200 text-center text-sm font-semibold px-4 py-3 border border-base-300';
+      th.textContent = DAY_LABELS[day] || day;
+      dayRow.appendChild(th);
+    });
+    thead.appendChild(dayRow);
+
+    const classRow = document.createElement('tr');
+    DAYS.forEach((day, dayIdx) => {
+      orderedClassIds.forEach(classId => {
+        const th = document.createElement('th');
+        const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/60';
+        th.className = `${stripe} text-center text-xs font-medium px-3 py-2 border border-base-300`;
+        th.textContent = getClassName(classId);
+        classRow.appendChild(th);
+      });
+    });
+    thead.appendChild(classRow);
+
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    periods.forEach(period => {
+      const tr = document.createElement('tr');
+      const periodCell = document.createElement('th');
+      periodCell.className = 'bg-base-100 px-3 py-4 text-left text-xs font-semibold border border-base-300';
+      periodCell.textContent = `${period}. Stunde`;
+      tr.appendChild(periodCell);
+
+      DAYS.forEach((day, dayIdx) => {
+        orderedClassIds.forEach(classId => {
+          const td = document.createElement('td');
+          const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/40';
+          td.className = `align-top p-1.5 border border-base-200 ${stripe} min-w-[150px]`;
+          const slot = slotMap.get(`${day}-${classId}-${period}`);
+          td.appendChild(renderSlotCard(slot));
+          tr.appendChild(td);
+        });
+      });
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'overflow-x-auto';
+    wrapper.appendChild(table);
     return wrapper;
+  }
+
+  function renderSlotCard(slot) {
+    const card = document.createElement('div');
+    card.className = 'h-full min-h-[72px] rounded-lg border border-dashed border-base-300 bg-base-200/40 flex flex-col justify-center items-center text-[11px] text-base-content/60';
+
+    if (!slot) {
+      card.textContent = 'frei';
+      return card;
+    }
+
+    card.className = 'h-full min-h-[72px] rounded-lg border border-base-300 bg-base-100 px-2.5 py-2 flex flex-col gap-1 shadow-sm';
+
+    const subject = state.subjects.get(slot.subject_id);
+    const teacher = state.teachers.get(slot.teacher_id);
+
+    if (subject?.color) {
+      const bg = colorToRgba(subject.color, 0.25);
+      const border = colorToRgba(subject.color, 0.6) || subject.color;
+      if (bg) card.style.backgroundColor = bg;
+      if (border) card.style.borderColor = border;
+    }
+    if (slot.is_fixed) {
+      card.classList.add('ring', 'ring-primary/40', 'ring-offset-1');
+    }
+    if (slot.is_flexible) {
+      card.classList.add('border-dashed');
+    }
+
+    const subjectLine = document.createElement('div');
+    subjectLine.className = 'font-semibold text-xs uppercase tracking-wide text-base-content';
+    subjectLine.textContent = subject?.kuerzel || subject?.name || `Fach #${slot.subject_id}`;
+    card.appendChild(subjectLine);
+
+    if (teacher) {
+      const teacherLine = document.createElement('div');
+      teacherLine.className = 'text-[11px] opacity-80';
+      teacherLine.textContent = teacher.kuerzel || teacher.name || '';
+      if (teacherLine.textContent) card.appendChild(teacherLine);
+    }
+
+    const markers = document.createElement('div');
+    markers.className = 'flex flex-wrap items-center gap-1 mt-auto';
+    if (slot.is_fixed) {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-xs badge-outline badge-primary';
+      badge.textContent = 'Fix';
+      markers.appendChild(badge);
+    }
+    if (slot.is_flexible) {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-xs badge-outline';
+      badge.textContent = 'Option';
+      markers.appendChild(badge);
+    }
+    if (markers.childElementCount) {
+      card.appendChild(markers);
+    }
+
+    return card;
+  }
+
+  function getClassName(classId) {
+    return state.classes.get(classId)?.name || `Klasse #${classId}`;
+  }
+
+  function colorToRgba(hex, alpha) {
+    if (typeof hex !== 'string') return null;
+    const cleaned = hex.trim().replace('#', '');
+    if (cleaned.length !== 6) return null;
+    const num = Number.parseInt(cleaned, 16);
+    if (Number.isNaN(num)) return null;
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   return container;

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from typing import Dict, List, Tuple, Optional
+import logging
 
 import pandas as pd
 from ortools.sat.python import cp_model
 from sqlmodel import Session, select
 
 from stundenplan_regeln import add_constraints
+
+solver_logger = logging.getLogger("stundenplan.solver")
+if not solver_logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(levelname)s %(name)s: %(message)s")
+    handler.setFormatter(formatter)
+    solver_logger.addHandler(handler)
+solver_logger.setLevel(logging.DEBUG)
+solver_logger.propagate = True
 from ..models import Requirement, Subject, Teacher, Class, Room
 from ..utils import TAGE
 
@@ -82,6 +92,7 @@ def solve_best_plan(
     room_plan: Optional[Dict[int, Dict[str, List[bool]]]] = None,
     fixed_slots: Optional[Dict[int, List[Tuple[str, int]]]] = None,
     flexible_groups: Optional[List[Dict[str, object]]] = None,
+    class_windows: Optional[Dict[str, Dict[str, List[bool]]]] = None,
     multi_start: bool = True,
     max_attempts: int = 10,
     patience: int = 3,
@@ -97,16 +108,22 @@ def solve_best_plan(
         import random
 
         rnd = random.Random(seed)
-        for fid in FACH_ID:
-            for tag in TAGE:
-                for std in range(8):
-                    model.AddHint(plan[(fid, tag, std)], 0)
+        hinted = set()
         for fid in FACH_ID:
             need = int(df.loc[fid, "Wochenstunden"])
+            if need <= 0:
+                continue
             candidates = [(tag, s) for tag in TAGE for s in range(slots_per_day)]
             rnd.shuffle(candidates)
-            for (tag, s) in candidates[:need]:
+            for (tag, s) in candidates:
+                key = (fid, tag, s)
+                if key in hinted:
+                    continue
                 model.AddHint(plan[(fid, tag, s)], 1)
+                hinted.add(key)
+                need -= 1
+                if need <= 0:
+                    break
 
     def solve_once(seed: int):
         model = cp_model.CpModel()
@@ -123,6 +140,7 @@ def solve_best_plan(
             room_plan=room_plan,
             fixed_slots=fixed_slots,
             flexible_groups=flexible_groups,
+            class_windows=class_windows,
         )
 
         if use_value_hints:
@@ -145,6 +163,13 @@ def solve_best_plan(
     for attempt_idx in range(total_attempts):
         seed = int(base_seed + attempt_idx * seed_step)
         status, solver, model, plan = solve_once(seed)
+        solver_logger.debug(
+            "solve_best_plan attempt=%s seed=%s status=%s objective=%s",
+            attempt_idx,
+            seed,
+            status,
+            getattr(solver, "ObjectiveValue", lambda: None)(),
+        )
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             no_improve += 1
         else:
@@ -159,8 +184,16 @@ def solve_best_plan(
             break
 
     if best_pack is None:
-        # return infeasible choice
+        solver_logger.warning(
+            "solve_best_plan exhausted attempts without feasible solution | attempts=%s",
+            total_attempts,
+        )
         return cp_model.INFEASIBLE, cp_model.CpSolver(), cp_model.CpModel(), {}, 0.0
 
     status, solver, model, plan = best_pack
+    solver_logger.debug(
+        "solve_best_plan best status=%s score=%.2f",
+        status,
+        float(best_score or 0.0),
+    )
     return status, solver, model, plan, float(best_score or 0.0)

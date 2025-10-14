@@ -24,6 +24,7 @@ class GenerateRequest(BaseModel):
     override_rules: Optional[Dict[str, int | bool]] = None
     version_id: Optional[int] = None
     comment: Optional[str] = None
+    dry_run: bool = False
     params: GenerateParams = Field(default_factory=GenerateParams)
 
 
@@ -38,10 +39,12 @@ class PlanSlotOut(BaseModel):
     stunde: int
     subject_id: int
     teacher_id: int
+    is_fixed: bool | None = None
+    is_flexible: bool | None = None
 
 
 class GenerateResponse(BaseModel):
-    plan_id: int
+    plan_id: Optional[int]
     status: str
     score: float | None
     objective_value: float | None
