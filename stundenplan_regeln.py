@@ -331,6 +331,28 @@ def add_constraints(
                 model.Add(sum(vormittag) >= 4)
 
     # -------- 10) Bandfächer parallel (gleiche Slots je Klasse) --------
+    fixed_slots = fixed_slots or {}
+    for fid, slots in (fixed_slots.items() if isinstance(fixed_slots, dict) else []):
+        for tag, std in slots:
+            if (fid, tag, std) in plan:
+                model.Add(plan[(fid, tag, std)] == 1)
+
+    flexible_groups = flexible_groups or []
+    for entry in flexible_groups:
+        if not isinstance(entry, dict):
+            continue
+        fid = entry.get("fid")
+        slots = entry.get("slots")
+        if fid is None or not isinstance(slots, list):
+            continue
+        literals = []
+        for tag, std in slots:
+            key = (fid, tag, std)
+            if key in plan:
+                literals.append(plan[key])
+        if literals:
+            model.Add(sum(literals) == 1)
+
     band_subjects: dict[str, list[int]] = {}
     if "Bandfach" in df.columns:
         for fid in FACH_ID:
@@ -404,23 +426,3 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
 
     for fid in band_fids:
         model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) == tage)
-    fixed_slots = fixed_slots or {}
-    flexible_groups = flexible_groups or []
-
-    for fid, slots in fixed_slots.items():
-        for tag, std in slots:
-            if (fid, tag, std) in plan:
-                model.Add(plan[(fid, tag, std)] == 1)
-
-    for entry in flexible_groups:
-        fid = entry.get("fid") if isinstance(entry, dict) else None
-        slots = entry.get("slots") if isinstance(entry, dict) else None
-        if fid is None or not isinstance(slots, list):
-            continue
-        literals = []
-        for tag, std in slots:
-            key = (fid, tag, std)
-            if key in plan:
-                literals.append(plan[key])
-        if literals:
-            model.Add(sum(literals) == 1)

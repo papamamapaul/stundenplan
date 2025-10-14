@@ -27,9 +27,12 @@ def _rules_to_dict(rule_profile: Dict[str, int | bool] | None) -> Dict[str, int 
     return dict(rule_profile)
 
 
-def fetch_requirements_dataframe(session: Session) -> Tuple[pd.DataFrame, List[int], List[str], List[str]]:
+def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = None) -> Tuple[pd.DataFrame, List[int], List[str], List[str]]:
     # Holt Requirements + Namen und baut das Erwartungs-DF
-    reqs = session.exec(select(Requirement)).all()
+    stmt = select(Requirement)
+    if version_id is not None:
+        stmt = stmt.where(Requirement.version_id == version_id)
+    reqs = session.exec(stmt).all()
     if not reqs:
         return pd.DataFrame(), [], [], []
 

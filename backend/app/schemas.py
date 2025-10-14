@@ -22,7 +22,14 @@ class GenerateRequest(BaseModel):
     name: str = Field(description="Name des Plans")
     rule_profile_id: Optional[int] = None
     override_rules: Optional[Dict[str, int | bool]] = None
+    version_id: Optional[int] = None
+    comment: Optional[str] = None
     params: GenerateParams = Field(default_factory=GenerateParams)
+
+
+class PlanUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    comment: Optional[str] = None
 
 
 class PlanSlotOut(BaseModel):

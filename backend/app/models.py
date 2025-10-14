@@ -112,6 +112,8 @@ class Plan(SQLModel, table=True):
     objective_value: Optional[float] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     is_favorite: bool = Field(default=False)
+    comment: Optional[str] = Field(default=None)
+    version_id: Optional[int] = Field(default=None, foreign_key="distributionversion.id")
 
 
 class PlanSlot(SQLModel, table=True):

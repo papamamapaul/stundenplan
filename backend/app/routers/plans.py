@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import json
 from collections import defaultdict
 
@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from ..database import get_session
 from ..models import Class, Plan, PlanSlot, RuleProfile, Subject, Teacher, BasisPlan
-from ..schemas import GenerateRequest, GenerateResponse, PlanSlotOut
+from ..schemas import GenerateRequest, GenerateResponse, PlanSlotOut, PlanUpdateRequest
 from ..services.solver_service import (
     _rules_to_dict,
     fetch_requirements_dataframe,
@@ -51,11 +51,11 @@ def list_rules() -> dict:
 
 
 @router.get("/analyze")
-def analyze_inputs(session: Session = Depends(get_session)) -> dict:
+def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(get_session)) -> dict:
     """Returns a lightweight analysis of current data for planning: counts per class/subject,
     teacher loads vs deputat, and flags presence for DS/Nachmittag in requirements.
     """
-    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session)
+    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session, version_id=version_id)
     if df.empty:
         return {"ok": True, "empty": True}
 
@@ -104,10 +104,14 @@ def analyze_inputs(session: Session = Depends(get_session)) -> dict:
 
 @router.post("/generate", response_model=GenerateResponse)
 def generate_plan(req: GenerateRequest, session: Session = Depends(get_session)) -> GenerateResponse:
+    version_id = req.version_id
     # Daten laden
-    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session)
+    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session, version_id=version_id)
     if df.empty:
-        raise HTTPException(status_code=400, detail="Keine Requirements in der DB – bitte zuerst Bedarf anlegen.")
+        msg = "Keine Requirements in der DB – bitte zuerst Bedarf anlegen."
+        if version_id is not None:
+            msg = f"Keine Requirements für Version #{version_id} gefunden – bitte zuerst Bedarf anlegen."
+        raise HTTPException(status_code=400, detail=msg)
 
     subject_rows = session.exec(select(Subject)).all()
     class_rows = session.exec(select(Class)).all()
@@ -326,6 +330,8 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         status={cp_model.OPTIMAL: "OPTIMAL", cp_model.FEASIBLE: "FEASIBLE"}.get(status, str(status)),
         score=best_score,
         objective_value=solver.ObjectiveValue() if hasattr(solver, "ObjectiveValue") else None,
+        comment=req.comment,
+        version_id=version_id,
     )
     session.add(plan_row)
     session.commit()
@@ -378,3 +384,21 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         objective_value=plan_row.objective_value,
         slots=slots_out,
     )
+
+
+@router.put("/{plan_id}", response_model=Plan)
+def update_plan_metadata(plan_id: int, payload: PlanUpdateRequest, session: Session = Depends(get_session)) -> Plan:
+    plan = session.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+    data = payload.dict(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        new_name = str(data["name"]).strip()
+        if new_name:
+            plan.name = new_name
+    if "comment" in data:
+        plan.comment = data["comment"]
+    session.add(plan)
+    session.commit()
+    session.refresh(plan)
+    return plan

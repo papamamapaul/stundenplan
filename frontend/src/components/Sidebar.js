@@ -2,7 +2,7 @@ const NAVIGATION = [
   {
     group: 'Planung',
     items: [
-      { label: 'Dashboard', hash: '#/plan' },
+      { label: 'Planung', hash: '#/plan' },
       { label: 'Basisplan', hash: '#/basisplan' },
       { label: 'Stundenverteilung', hash: '#/stundenverteilung' },
       { label: 'Datenpflege', hash: '#/datenpflege' },
