@@ -123,6 +123,7 @@ export function createPlanView() {
     ruleBaseWeights: new Map(),
     ruleValuesBools: new Map(),
     ruleValuesWeights: new Map(),
+    ruleDefinitionByKey: new Map(),
     planName: defaultPlanName(),
     planComment: '',
     generatedPlans: [],
@@ -316,6 +317,13 @@ export function createPlanView() {
       state.selectedVersionId = versions[0]?.id ?? null;
       state.ruleProfiles = profiles;
       state.rulesDefinition = rules;
+      state.ruleDefinitionByKey = new Map();
+      (rules?.bools || []).forEach(rule => {
+        state.ruleDefinitionByKey.set(rule.key, rule);
+      });
+      (rules?.weights || []).forEach(rule => {
+        state.ruleDefinitionByKey.set(rule.key, rule);
+      });
       state.subjects = new Map(subjects.map(sub => [sub.id, sub]));
       state.classes = new Map(classes.map(cls => [cls.id, cls]));
       state.teachers = new Map(teachers.map(t => [t.id, t]));
@@ -453,6 +461,12 @@ export function createPlanView() {
       title.className = 'font-medium text-sm';
       title.textContent = rule.label || rule.key;
       info.appendChild(title);
+      if (rule.info) {
+        const desc = document.createElement('span');
+        desc.className = 'text-xs opacity-70';
+        desc.textContent = rule.info;
+        info.appendChild(desc);
+      }
       const toggle = document.createElement('input');
       toggle.type = 'checkbox';
       toggle.className = 'toggle toggle-primary';
@@ -511,7 +525,14 @@ export function createPlanView() {
         markDebugStale();
       });
 
-      wrap.append(label, range, number);
+      wrap.appendChild(label);
+      if (rule.info) {
+        const desc = document.createElement('p');
+        desc.className = 'text-xs opacity-70';
+        desc.textContent = rule.info;
+        wrap.appendChild(desc);
+      }
+      wrap.append(range, number);
       weightsContainer.appendChild(wrap);
       state.weightInputs.set(rule.key, { range, number });
     });
@@ -589,6 +610,9 @@ export function createPlanView() {
         comment: state.planComment,
         versionId: state.selectedVersionId,
         createdAt: new Date(),
+        ruleKeysActive: response.rule_keys_active || [],
+        rulesSnapshot: response.rules_snapshot || {},
+        paramsUsed: response.params_used || { ...state.params },
       };
       state.generatedPlans.unshift(planEntry);
       state.generatedPlans = state.generatedPlans.slice(0, 5);
@@ -898,6 +922,11 @@ export function createPlanView() {
 
       headerRow.append(titleWrap, badges);
       body.appendChild(headerRow);
+
+      const activeRulesBlock = renderActiveRuleBadges(entry);
+      if (activeRulesBlock) {
+        body.appendChild(activeRulesBlock);
+      }
 
       body.appendChild(renderPlanGrid(entry));
 
@@ -1342,6 +1371,31 @@ export function createPlanView() {
     wrapper.className = 'overflow-x-auto';
     wrapper.appendChild(table);
     return wrapper;
+  }
+
+  function renderActiveRuleBadges(planEntry) {
+    if (!planEntry.ruleKeysActive || !planEntry.ruleKeysActive.length) {
+      return null;
+    }
+    const block = document.createElement('div');
+    block.className = 'space-y-2';
+    const heading = document.createElement('p');
+    heading.className = 'text-xs font-semibold uppercase tracking-wide opacity-70';
+    heading.textContent = 'Aktive Regeln';
+    const list = document.createElement('div');
+    list.className = 'flex flex-wrap items-center gap-1.5';
+    planEntry.ruleKeysActive.forEach(key => {
+      const ruleDef = state.ruleDefinitionByKey.get(key);
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-sm badge-outline';
+      badge.textContent = ruleDef?.label || key;
+      if (ruleDef?.info) {
+        badge.title = ruleDef.info;
+      }
+      list.appendChild(badge);
+    });
+    block.append(heading, list);
+    return list.childElementCount ? block : null;
   }
 
   function renderSlotCard(slot) {

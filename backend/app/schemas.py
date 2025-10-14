@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,9 @@ class GenerateResponse(BaseModel):
     score: float | None
     objective_value: float | None
     slots: List[PlanSlotOut]
+    rules_snapshot: Dict[str, Union[int, bool]] = Field(default_factory=dict)
+    rule_keys_active: List[str] = Field(default_factory=list)
+    params_used: GenerateParams
 
 
 # Backup/export schemas

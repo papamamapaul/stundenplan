@@ -39,31 +39,155 @@ def list_rules() -> dict:
     """
     return {
         "bools": [
-            {"key": "stundenbedarf_vollstaendig", "label": "Alle Requirements vollständig planen", "default": True},
-            {"key": "keine_lehrerkonflikte", "label": "Lehrkraft nicht doppelt belegen", "default": True},
-            {"key": "keine_klassenkonflikte", "label": "Klasse nicht doppelt belegen", "default": True},
-            {"key": "raum_verfuegbarkeit", "label": "Raumverfügbarkeiten aus Basisplan berücksichtigen", "default": True},
-            {"key": "basisplan_fixed", "label": "Feste Slots aus Basisplan erzwingen", "default": True},
-            {"key": "basisplan_flexible", "label": "Flexible Slot-Gruppen aus Basisplan respektieren", "default": True},
-            {"key": "basisplan_windows", "label": "Basisplan-Zeitfenster (Klassen) respektieren", "default": True},
-            {"key": "stundenbegrenzung", "label": "Tageslimit (Mo–Do 6, Fr 5)", "default": True},
-            {"key": "stundenbegrenzung_erste_stunde", "label": "Bei vollem Tag 1. Stunde belegen", "default": True},
-            {"key": "nachmittag_regel", "label": "Nachmittag nur Di (globale Regel)", "default": True},
-            {"key": "fach_nachmittag_regeln", "label": "Fachspezifische Nachmittag-Regeln anwenden", "default": True},
-            {"key": "keine_hohlstunden", "label": "Hohlstunden minimieren (Soft)", "default": True},
-            {"key": "keine_hohlstunden_hard", "label": "Keine Hohlstunden (Hard)", "default": False},
-            {"key": "doppelstundenregel", "label": "Doppelstunden-Regel (max 2 in Folge)", "default": True},
-            {"key": "einzelstunde_nur_rand", "label": "Einzelstunde nur Rand (bei DS=muss)", "default": True},
-            {"key": "bandstunden_parallel", "label": "Bandfächer parallel planen", "default": True},
-            {"key": "gleichverteilung", "label": "Gleichverteilung über Woche (Soft)", "default": True},
-            {"key": "mittagsschule_vormittag", "label": "Vormittagsregel Mittagsschule (4/≥5)", "default": True},
+            {
+                "key": "stundenbedarf_vollstaendig",
+                "label": "Alle Requirements vollständig planen",
+                "default": True,
+                "info": "Jede geforderte Unterrichtsstunde wird eingeplant (keine Unterdeckung).",
+            },
+            {
+                "key": "keine_lehrerkonflikte",
+                "label": "Lehrkraft nicht doppelt belegen",
+                "default": True,
+                "info": "Verhindert, dass eine Lehrkraft gleichzeitig zwei Klassen unterrichtet.",
+            },
+            {
+                "key": "keine_klassenkonflikte",
+                "label": "Klasse nicht doppelt belegen",
+                "default": True,
+                "info": "Sichert, dass jede Klasse pro Slot höchstens ein Fach hat.",
+            },
+            {
+                "key": "raum_verfuegbarkeit",
+                "label": "Raumverfügbarkeiten aus Basisplan berücksichtigen",
+                "default": True,
+                "info": "Sperrt Räume in Slots, die im Basisplan als nicht verfügbar markiert sind.",
+            },
+            {
+                "key": "basisplan_fixed",
+                "label": "Feste Slots aus Basisplan erzwingen",
+                "default": True,
+                "info": "Übernimmt alle fix eingetragenen Basisplan-Stunden ohne Änderungen.",
+            },
+            {
+                "key": "basisplan_flexible",
+                "label": "Flexible Slot-Gruppen aus Basisplan respektieren",
+                "default": True,
+                "info": "Wählt genau einen Slot aus jeder Basisplan-Optionengruppe.",
+            },
+            {
+                "key": "basisplan_windows",
+                "label": "Basisplan-Zeitfenster (Klassen) respektieren",
+                "default": True,
+                "info": "Sperrt Unterrichtszeiten einer Klasse gemäß den Basisplan-Fenstern.",
+            },
+            {
+                "key": "stundenbegrenzung",
+                "label": "Tageslimit (Mo–Do 6, Fr 5)",
+                "default": True,
+                "info": "Limitiert Unterricht auf 6 Stunden (Mo–Do) bzw. 5 Stunden (Fr).",
+            },
+            {
+                "key": "stundenbegrenzung_erste_stunde",
+                "label": "Bei vollem Tag 1. Stunde belegen",
+                "default": True,
+                "info": "Wenn der Tag voll ist, wird die erste Stunde automatisch belegt.",
+            },
+            {
+                "key": "nachmittag_regel",
+                "label": "Nachmittag nur Di (globale Regel)",
+                "default": True,
+                "info": "Erlaubt Unterricht nach der 6. Stunde nur am Dienstag.",
+            },
+            {
+                "key": "fach_nachmittag_regeln",
+                "label": "Fachspezifische Nachmittag-Regeln anwenden",
+                "default": True,
+                "info": "Beachtet pro Requirement die Vorgabe 'Nachmittag muss/kann/nein'.",
+            },
+            {
+                "key": "nachmittag_pause_stunde",
+                "label": "Nachmittag mit freier 6. Stunde",
+                "default": False,
+                "info": "Ist Unterricht am Nachmittag geplant, bleibt die 6. Stunde frei.",
+            },
+            {
+                "key": "keine_hohlstunden",
+                "label": "Hohlstunden minimieren (Soft)",
+                "default": True,
+                "info": "Bestraft einzelne Hohlstunden innerhalb eines Tages.",
+            },
+            {
+                "key": "keine_hohlstunden_hard",
+                "label": "Keine Hohlstunden (Hard)",
+                "default": False,
+                "info": "Verbietet Hohlstunden vollständig (streng).",
+            },
+            {
+                "key": "doppelstundenregel",
+                "label": "Doppelstunden-Regel (max 2 in Folge)",
+                "default": True,
+                "info": "Setzt Doppelstunden gemäß Muss/Kann/Nein und verhindert Dreierblöcke.",
+            },
+            {
+                "key": "einzelstunde_nur_rand",
+                "label": "Einzelstunde nur Rand (bei DS=muss)",
+                "default": True,
+                "info": "Bei Pflicht-Doppelstunden dürfen Einzelstunden nur an Randpositionen liegen.",
+            },
+            {
+                "key": "bandstunden_parallel",
+                "label": "Bandfächer parallel planen",
+                "default": True,
+                "info": "Lege Bandfächer (is_bandfach) parallel in allen beteiligten Klassen und verteilt sie auf unterschiedliche Tage.",
+            },
+            {
+                "key": "gleichverteilung",
+                "label": "Gleichverteilung über Woche (Soft)",
+                "default": True,
+                "info": "Sorgt soft dafür, dass Tageslasten möglichst gleich verteilt sind.",
+            },
+            {
+                "key": "mittagsschule_vormittag",
+                "label": "Vormittagsminimum je Tag",
+                "default": True,
+                "info": "Verlangt an jedem Tag mindestens vier Stunden Unterricht vor der Mittagspause.",
+            },
         ],
         "weights": [
-            {"key": "W_GAPS_START", "label": "Gewicht Startlücke", "default": 2, "min": 0, "max": 50},
-            {"key": "W_GAPS_INSIDE", "label": "Gewicht Hohlstunden (innen)", "default": 3, "min": 0, "max": 50},
-            {"key": "W_EVEN_DIST", "label": "Gewicht Gleichverteilung", "default": 1, "min": 0, "max": 50},
-            {"key": "W_EINZEL_KANN", "label": "Gewicht Einzelstunden-Penalty (DS=kann)", "default": 5, "min": 0, "max": 50},
-        ]
+            {
+                "key": "W_GAPS_START",
+                "label": "Gewicht Startlücke",
+                "default": 2,
+                "min": 0,
+                "max": 50,
+                "info": "Penalty für freie erste Stunde, wenn danach Unterricht folgt.",
+            },
+            {
+                "key": "W_GAPS_INSIDE",
+                "label": "Gewicht Hohlstunden (innen)",
+                "default": 3,
+                "min": 0,
+                "max": 50,
+                "info": "Penalty für Lücken zwischen zwei belegten Stunden.",
+            },
+            {
+                "key": "W_EVEN_DIST",
+                "label": "Gewicht Gleichverteilung",
+                "default": 1,
+                "min": 0,
+                "max": 50,
+                "info": "Penalty für Tagesabweichungen von der durchschnittlichen Klassenlast.",
+            },
+            {
+                "key": "W_EINZEL_KANN",
+                "label": "Gewicht Einzelstunden-Penalty (DS=kann)",
+                "default": 5,
+                "min": 0,
+                "max": 50,
+                "info": "Penalty für Einzelstunden, wenn Doppelstunden optional erlaubt sind.",
+            },
+        ],
     }
 
 
@@ -148,6 +272,36 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     )
     logger.debug("Requirements raw payload: %s", df.to_dict(orient="records"))
 
+    rules_definition = list_rules()
+    bool_rule_keys = {entry["key"] for entry in rules_definition.get("bools", [])}
+    weight_rule_keys = {entry["key"] for entry in rules_definition.get("weights", [])}
+    effective_rules: dict[str, int | bool] = {}
+    for entry in rules_definition.get("bools", []):
+        effective_rules[entry["key"]] = bool(entry.get("default", False))
+    for entry in rules_definition.get("weights", []):
+        default_val = entry.get("default")
+        if default_val is None:
+            default_val = 0
+        effective_rules[entry["key"]] = int(default_val)
+
+    def _coerce_bool(value: object, fallback: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return fallback if value is None else bool(value)
+
+    def _coerce_int(value: object, fallback: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return fallback
+
     subject_rows = session.exec(select(Subject)).all()
     class_rows = session.exec(select(Class)).all()
     teacher_rows = session.exec(select(Teacher)).all()
@@ -159,20 +313,47 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     teachers_by_name = {t.name: t.id for t in teacher_rows}
 
     # Regelprofil laden oder Defaults
-    rules: dict = {}
     if req.rule_profile_id is not None:
         prof = session.get(RuleProfile, req.rule_profile_id)
         if not prof:
             raise HTTPException(status_code=404, detail="Regelprofil nicht gefunden")
-        rules = _rules_to_dict(prof.dict())
+        prof_dict = _rules_to_dict(prof.dict())
+        for entry in rules_definition.get("bools", []):
+            key = entry["key"]
+            if key in prof_dict and prof_dict[key] is not None:
+                effective_rules[key] = _coerce_bool(prof_dict[key], bool(effective_rules.get(key, False)))
+        for entry in rules_definition.get("weights", []):
+            key = entry["key"]
+            if key in prof_dict and prof_dict[key] is not None:
+                effective_rules[key] = _coerce_int(prof_dict[key], int(effective_rules.get(key, 0)))
+        if "leseband_parallel" in prof_dict and "bandstunden_parallel" in effective_rules:
+            effective_rules["bandstunden_parallel"] = _coerce_bool(
+                prof_dict["leseband_parallel"],
+                bool(effective_rules.get("bandstunden_parallel", True)),
+            )
 
     if req.override_rules:
-        rules.update(req.override_rules)
+        for key, value in req.override_rules.items():
+            if key in bool_rule_keys:
+                effective_rules[key] = _coerce_bool(value, bool(effective_rules.get(key, False)))
+            elif key in weight_rule_keys:
+                effective_rules[key] = _coerce_int(value, int(effective_rules.get(key, 0)))
+            else:
+                effective_rules[key] = value
+        if "leseband_parallel" in req.override_rules and "bandstunden_parallel" in effective_rules:
+            effective_rules["bandstunden_parallel"] = _coerce_bool(
+                req.override_rules["leseband_parallel"],
+                bool(effective_rules.get("bandstunden_parallel", True)),
+            )
 
-    if "bandstunden_parallel" not in rules and "leseband_parallel" in rules:
-        rules["bandstunden_parallel"] = rules["leseband_parallel"]
+    active_rule_keys = sorted(
+        key for key in bool_rule_keys if bool(effective_rules.get(key))
+    )
 
-    logger.info("Effective rule toggles: %s", {k: rules[k] for k in sorted(rules.keys())})
+    logger.info(
+        "Effective rule toggles: %s",
+        {k: bool(effective_rules.get(k)) for k in sorted(bool_rule_keys)},
+    )
 
     # Basisplan-Raumverfügbarkeit laden (optional)
     room_plan: dict[int, dict[str, list[bool]]] = {}
@@ -429,7 +610,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         len(FACH_ID),
         KLASSEN,
         LEHRER,
-        len(rules),
+        len(effective_rules),
         req.dry_run,
     )
     status, solver, model, plan, best_score = solve_best_plan(
@@ -437,7 +618,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         FACH_ID=FACH_ID,
         KLASSEN=KLASSEN,
         LEHRER=LEHRER,
-        regeln=rules,
+        regeln=effective_rules,
         room_plan=room_plan or None,
         fixed_slots=fixed_slot_map or None,
         flexible_groups=flexible_groups or None,
@@ -535,6 +716,9 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
             score=best_score,
             objective_value=solver.ObjectiveValue() if hasattr(solver, "ObjectiveValue") else None,
             slots=slots_out,
+            rules_snapshot=dict(effective_rules),
+            rule_keys_active=active_rule_keys,
+            params_used=req.params,
         )
 
     # Plan speichern
@@ -571,6 +755,9 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         score=plan_row.score,
         objective_value=plan_row.objective_value,
         slots=slots_out,
+        rules_snapshot=dict(effective_rules),
+        rule_keys_active=active_rule_keys,
+        params_used=req.params,
     )
 
 

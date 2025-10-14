@@ -40,6 +40,7 @@ def add_constraints(
       - keine_hohlstunden_hard (bool)       -> Hard (optional)
       - nachmittag_regel (bool)              -> Nachmittag nur Di (Std 7/8)
       - fach_nachmittag_regeln (bool)        -> nutzt Requirement 'Nachmittag'
+      - nachmittag_pause_stunde (bool)
       - doppelstundenregel (bool)
       - einzelstunde_nur_rand (bool)
       - bandstunden_parallel (bool)         # Alias leseband_parallel
@@ -74,6 +75,7 @@ def add_constraints(
     enforce_first_slot = bool(regeln.get("stundenbegrenzung_erste_stunde", True))
     enforce_global_afternoon = bool(regeln.get("nachmittag_regel", True))
     enforce_subject_afternoon = bool(regeln.get("fach_nachmittag_regeln", True))
+    enforce_afternoon_break = bool(regeln.get("nachmittag_pause_stunde", False))
     enforce_midday_rule = bool(regeln.get("mittagsschule_vormittag", True))
     enforce_band_parallel = bool(regeln.get("bandstunden_parallel", regeln.get("leseband_parallel", True)))
 
@@ -333,24 +335,36 @@ def add_constraints(
                         model.Add(plan[(fid, tag, std)] == 0)
             # 'kann' -> keine Extra-Einschränkung (global gilt ggf. 4) )
 
-    # -------- 8) Vormittagsregel bei Mittagsschule (4 / ≥5) --------
+    # -------- 8) Vormittagsminimum je Klasse/Tag (mind. 4 Stunden) --------
     if enforce_midday_rule:
         for klasse in KLASSEN:
             for tag in TAGE:
                 vormittag = [plan[(fid, tag, s)]
                              for fid in FACH_ID for s in range(6)
                              if str(df.loc[fid, 'Klasse']) == str(klasse)]
+                if vormittag:
+                    model.Add(sum(vormittag) >= 4)
+
+    # -------- 9) Freie 6. Stunde, wenn Nachmittag stattfindet --------
+    if enforce_afternoon_break:
+        for klasse in KLASSEN:
+            for tag in TAGE:
                 nachmittag = [plan[(fid, tag, s)]
                               for fid in FACH_ID for s in (6, 7)
                               if str(df.loc[fid, 'Klasse']) == str(klasse)]
-                mittags = model.NewBoolVar(f"mittag_{klasse}_{tag}")
-                model.Add(sum(nachmittag) >= 1).OnlyEnforceIf(mittags)
-                model.Add(sum(nachmittag) == 0).OnlyEnforceIf(mittags.Not())
-                model.Add(sum(vormittag) == 4).OnlyEnforceIf(mittags)
-                model.Add(sum(vormittag) >= 5).OnlyEnforceIf(mittags.Not())
-                model.Add(sum(vormittag) >= 4)
+                if not nachmittag:
+                    continue
+                sechste = [plan[(fid, tag, 5)]
+                           for fid in FACH_ID
+                           if str(df.loc[fid, 'Klasse']) == str(klasse)]
+                if not sechste:
+                    continue
+                hat_nachmittag = model.NewBoolVar(f"nachmittag_{klasse}_{tag}")
+                model.Add(sum(nachmittag) >= 1).OnlyEnforceIf(hat_nachmittag)
+                model.Add(sum(nachmittag) == 0).OnlyEnforceIf(hat_nachmittag.Not())
+                model.Add(sum(sechste) == 0).OnlyEnforceIf(hat_nachmittag)
 
-    # -------- 9) Basisplan-Overrides (fix & flexibel) --------
+    # -------- 10) Basisplan-Overrides (fix & flexibel) --------
     if enforce_fixed_slots:
         fixed_slots = fixed_slots or {}
         for fid, slots in (fixed_slots.items() if isinstance(fixed_slots, dict) else []):
@@ -375,7 +389,7 @@ def add_constraints(
             if literals:
                 model.Add(sum(literals) == 1)
 
-    # -------- 10) Bandfächer parallel (gleiche Slots je Fach) --------
+    # -------- 11) Bandfächer parallel (gleiche Slots je Fach) --------
     if enforce_band_parallel and "Bandfach" in df.columns:
         band_subjects: dict[str, list[int]] = {}
         mismatched_hours: list[str] = []
@@ -406,7 +420,7 @@ def add_constraints(
         # Optional: Modelle mit unterschiedlichen Wochenstunden ignorieren einfach;
         # Debug lässt sich über Solver-Logs nachvollziehen.
 
-    # -------- 11) Gleichmäßige Verteilung (Soft) --------
+    # -------- 12) Gleichmäßige Verteilung (Soft) --------
     if regeln.get("gleichverteilung", False) and W_EVEN_DIST > 0:
         belegte_stunden_klasse_tag = {}
         for klasse in KLASSEN:
@@ -439,6 +453,7 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
     immer parallel in allen Klassen (gleicher Tag+Stunde).
     """
     parallel_slots = []
+    slots_by_day: dict[str, list[cp_model.IntVar]] = {tag: [] for tag in TAGE}
     for tag in TAGE:
         for std in range(8):
             slot_vars = [plan[(fid, tag, std)] for fid in band_fids]
@@ -446,8 +461,12 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
             for v in slot_vars:
                 model.Add(v == parallel)
             parallel_slots.append(parallel)
+            slots_by_day[tag].append(parallel)
 
     model.Add(sum(parallel_slots) == tage)
+    for tag, literals in slots_by_day.items():
+        if literals:
+            model.Add(sum(literals) <= 1)
 
     for fid in band_fids:
         model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) == tage)
