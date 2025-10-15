@@ -2,7 +2,8 @@ const NAVIGATION = [
   {
     group: 'Planung',
     items: [
-      { label: 'Planung', hash: '#/plan' },
+      { label: 'Neuen Plan erstellen', hash: '#/plan/new' },
+      { label: 'Bereits erstellte Pläne', hash: '#/plans' },
       { label: 'Basisplan', hash: '#/basisplan' },
       { label: 'Stundenverteilung', hash: '#/stundenverteilung' },
       { label: 'Datenpflege', hash: '#/datenpflege' },

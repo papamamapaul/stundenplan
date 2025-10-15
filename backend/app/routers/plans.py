@@ -5,13 +5,14 @@ import json
 from collections import defaultdict
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from ortools.sat.python import cp_model
 from sqlmodel import Session, select
+from sqlalchemy import delete, text
 
 from ..database import get_session
 from ..models import Class, Plan, PlanSlot, RuleProfile, Subject, Teacher, BasisPlan
-from ..schemas import GenerateRequest, GenerateResponse, PlanSlotOut, PlanUpdateRequest
+from ..schemas import GenerateParams, GenerateRequest, GenerateResponse, PlanDetail, PlanSlotOut, PlanSummary, PlanUpdateRequest
 from ..services.solver_service import (
     _rules_to_dict,
     fetch_requirements_dataframe,
@@ -30,6 +31,46 @@ logger.setLevel(logging.DEBUG)
 logger.propagate = True
 
 router = APIRouter(prefix="/plans", tags=["plans"])
+
+
+def _ensure_plan_metadata_columns(session: Session) -> None:
+    info = session.exec(text("PRAGMA table_info(plan)")).all()
+    columns = {row[1] for row in info}
+    statements: List[str] = []
+    if "rules_snapshot" not in columns:
+        statements.append("ALTER TABLE plan ADD COLUMN rules_snapshot TEXT")
+    if "rule_keys_active" not in columns:
+        statements.append("ALTER TABLE plan ADD COLUMN rule_keys_active TEXT")
+    if "params_used" not in columns:
+        statements.append("ALTER TABLE plan ADD COLUMN params_used TEXT")
+    for stmt in statements:
+        session.exec(text(stmt))
+    if statements:
+        session.commit()
+
+
+@router.get("", response_model=List[PlanSummary])
+def list_plans(limit: Optional[int] = None, session: Session = Depends(get_session)) -> List[PlanSummary]:
+    _ensure_plan_metadata_columns(session)
+    stmt = select(Plan).order_by(Plan.created_at.desc())
+    if limit:
+        stmt = stmt.limit(int(limit))
+    rows = session.exec(stmt).all()
+    return [
+        PlanSummary(
+            id=row.id,
+            name=row.name,
+            status=row.status,
+            score=row.score,
+            objective_value=row.objective_value,
+            created_at=row.created_at,
+            version_id=row.version_id,
+            comment=row.comment,
+            rule_profile_id=row.rule_profile_id,
+            rule_keys_active=json.loads(row.rule_keys_active) if row.rule_keys_active else [],
+        )
+        for row in rows
+    ]
 
 
 @router.get("/rules")
@@ -269,6 +310,7 @@ def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(
 
 @router.post("/generate", response_model=GenerateResponse)
 def generate_plan(req: GenerateRequest, session: Session = Depends(get_session)) -> GenerateResponse:
+    _ensure_plan_metadata_columns(session)
     version_id = req.version_id
     logger.info(
         "GeneratePlan called | version=%s profile=%s dry_run=%s params=%s overrides=%s",
@@ -745,6 +787,10 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
             params_used=req.params,
         )
 
+    rules_snapshot_json = json.dumps(effective_rules)
+    rule_keys_json = json.dumps(active_rule_keys)
+    params_json = json.dumps(req.params.dict())
+
     # Plan speichern
     plan_row = Plan(
         name=req.name,
@@ -755,6 +801,9 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         objective_value=solver.ObjectiveValue() if hasattr(solver, "ObjectiveValue") else None,
         comment=req.comment,
         version_id=version_id,
+        rules_snapshot=rules_snapshot_json,
+        rule_keys_active=rule_keys_json,
+        params_used=params_json,
     )
     session.add(plan_row)
     session.commit()
@@ -779,9 +828,59 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         score=plan_row.score,
         objective_value=plan_row.objective_value,
         slots=slots_out,
-        rules_snapshot=dict(effective_rules),
-        rule_keys_active=active_rule_keys,
+    rules_snapshot=json.loads(plan_row.rules_snapshot) if plan_row.rules_snapshot else {},
+        rule_keys_active=json.loads(plan_row.rule_keys_active) if plan_row.rule_keys_active else active_rule_keys,
         params_used=req.params,
+    )
+
+
+@router.get("/{plan_id}", response_model=PlanDetail)
+def get_plan(plan_id: int, session: Session = Depends(get_session)) -> PlanDetail:
+    _ensure_plan_metadata_columns(session)
+    plan = session.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+
+    slot_rows = session.exec(
+        select(PlanSlot).where(PlanSlot.plan_id == plan_id).order_by(PlanSlot.tag, PlanSlot.stunde)
+    ).all()
+    slots_out = [
+        PlanSlotOut(
+            class_id=row.class_id,
+            tag=row.tag,
+            stunde=row.stunde,
+            subject_id=row.subject_id,
+            teacher_id=row.teacher_id,
+            is_fixed=None,
+            is_flexible=None,
+        )
+        for row in slot_rows
+    ]
+
+    rules_snapshot = json.loads(plan.rules_snapshot) if plan.rules_snapshot else None
+    rule_keys_active = json.loads(plan.rule_keys_active) if plan.rule_keys_active else []
+    params_used = None
+    if plan.params_used:
+        try:
+            params_payload = json.loads(plan.params_used)
+            params_used = GenerateParams.parse_obj(params_payload)
+        except Exception:
+            params_used = None
+
+    return PlanDetail(
+        id=plan.id,
+        name=plan.name,
+        status=plan.status,
+        score=plan.score,
+        objective_value=plan.objective_value,
+        created_at=plan.created_at,
+        version_id=plan.version_id,
+        comment=plan.comment,
+        rule_profile_id=plan.rule_profile_id,
+        slots=slots_out,
+        rules_snapshot=rules_snapshot,
+        rule_keys_active=rule_keys_active,
+        params_used=params_used,
     )
 
 
@@ -801,3 +900,14 @@ def update_plan_metadata(plan_id: int, payload: PlanUpdateRequest, session: Sess
     session.commit()
     session.refresh(plan)
     return plan
+
+
+@router.delete("/{plan_id}", status_code=204)
+def delete_plan(plan_id: int, session: Session = Depends(get_session)) -> Response:
+    plan = session.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id))
+    session.delete(plan)
+    session.commit()
+    return Response(status_code=204)

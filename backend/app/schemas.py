@@ -43,6 +43,35 @@ class PlanSlotOut(BaseModel):
     is_flexible: bool | None = None
 
 
+class PlanSummary(BaseModel):
+    id: int
+    name: str
+    status: str
+    score: float | None
+    objective_value: float | None
+    created_at: datetime
+    version_id: Optional[int] = None
+    comment: Optional[str] = None
+    rule_profile_id: Optional[int] = None
+    rule_keys_active: List[str] = Field(default_factory=list)
+
+
+class PlanDetail(BaseModel):
+    id: int
+    name: str
+    status: str
+    score: float | None
+    objective_value: float | None
+    created_at: datetime
+    version_id: Optional[int] = None
+    comment: Optional[str] = None
+    rule_profile_id: Optional[int] = None
+    slots: List[PlanSlotOut] = Field(default_factory=list)
+    rules_snapshot: Optional[Dict[str, Union[int, bool]]] = None
+    rule_keys_active: List[str] = Field(default_factory=list)
+    params_used: Optional[GenerateParams] = None
+
+
 class GenerateResponse(BaseModel):
     plan_id: Optional[int]
     status: str

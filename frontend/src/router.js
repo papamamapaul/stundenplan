@@ -1,6 +1,6 @@
 import { getView } from './views/index.js';
 
-const DEFAULT_ROUTE = '#/plan';
+const DEFAULT_ROUTE = '#/plan/new';
 
 export function initRouter(target) {
   const render = () => {

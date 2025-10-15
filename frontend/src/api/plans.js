@@ -6,6 +6,18 @@ export async function fetchPlanRules() {
   return res.json();
 }
 
+export async function fetchPlans() {
+  const res = await fetch('/plans');
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchPlanDetail(planId) {
+  const res = await fetch(`/plans/${planId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function generatePlan(payload) {
   const cleaned = { ...payload };
   if (!cleaned.override_rules || !Object.keys(cleaned.override_rules).length) {
@@ -44,4 +56,11 @@ export async function updatePlan(planId, payload) {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function deletePlan(planId) {
+  const res = await fetch(`/plans/${planId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(await res.text());
 }

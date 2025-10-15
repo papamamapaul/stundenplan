@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
 
 
@@ -114,6 +115,9 @@ class Plan(SQLModel, table=True):
     is_favorite: bool = Field(default=False)
     comment: Optional[str] = Field(default=None)
     version_id: Optional[int] = Field(default=None, foreign_key="distributionversion.id")
+    rules_snapshot: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
+    rule_keys_active: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
+    params_used: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
 
 
 class PlanSlot(SQLModel, table=True):
