@@ -27,6 +27,54 @@ const DEFAULT_PARAMS = {
   use_value_hints: true,
 };
 
+const RULE_DEFAULTS_STORAGE_KEY = 'plan-view-rule-defaults-v1';
+
+const RULE_GROUPS = [
+  {
+    id: 'core',
+    label: 'Basisregeln',
+    description: 'Sorgt dafür, dass alle Anforderungen ohne Konflikte erfüllt werden.',
+    keys: ['stundenbedarf_vollstaendig', 'keine_lehrerkonflikte', 'keine_klassenkonflikte', 'raum_verfuegbarkeit'],
+  },
+  {
+    id: 'basisplan',
+    label: 'Basisplan & Rahmen',
+    description: 'Übernimmt Vorgaben aus dem Basisplan und legt Nachmittagsfenster fest.',
+    keys: ['basisplan_fixed', 'basisplan_flexible', 'basisplan_windows', 'nachmittag_pause_stunde'],
+  },
+  {
+    id: 'struktur',
+    label: 'Tagesstruktur',
+    description: 'Regelt Grenzen je Tag und besondere Vorgaben für Vormittag/Nachmittag.',
+    keys: ['stundenbegrenzung', 'stundenbegrenzung_erste_stunde', 'mittagsschule_vormittag', 'fach_nachmittag_regeln'],
+  },
+  {
+    id: 'unterricht',
+    label: 'Unterrichtsblöcke',
+    description: 'Definiert Regeln für Doppelstunden und Bandunterrichte.',
+    keys: ['doppelstundenregel', 'einzelstunde_nur_rand', 'bandstunden_parallel'],
+  },
+  {
+    id: 'verteilung',
+    label: 'Verteilung & Hohlstunden',
+    description: 'Steuert Lücken in Klassenstunden und die Gleichverteilung über die Woche.',
+    keys: ['keine_hohlstunden', 'keine_hohlstunden_hard', 'gleichverteilung'],
+  },
+  {
+    id: 'lehrer',
+    label: 'Lehrkräfte',
+    description: 'Optimiert Freistunden von Lehrkräften.',
+    keys: ['lehrer_hohlstunden_soft'],
+  },
+];
+
+const RULE_EXTRAS = {
+  keine_hohlstunden: ['W_GAPS_START', 'W_GAPS_INSIDE'],
+  gleichverteilung: ['W_EVEN_DIST'],
+  doppelstundenregel: ['W_EINZEL_KANN'],
+  lehrer_hohlstunden_soft: ['TEACHER_GAPS_DAY_MAX', 'TEACHER_GAPS_WEEK_MAX', 'W_TEACHER_GAPS'],
+};
+
 function defaultPlanName() {
   const now = new Date();
   return `Plan ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
@@ -124,6 +172,7 @@ export function createPlanView() {
     ruleValuesBools: new Map(),
     ruleValuesWeights: new Map(),
     ruleDefinitionByKey: new Map(),
+    ruleExtraContainers: new Map(),
     planName: defaultPlanName(),
     planComment: '',
     generatedPlans: [],
@@ -177,7 +226,15 @@ export function createPlanView() {
   rulesButton.textContent = 'Regeln anpassen';
 
   const rulesModal = createRulesModal();
-  const { element: rulesModalElement, boolsContainer, weightsContainer, open: openRulesModal, close: closeRulesModal, closeButton: rulesModalCloseButton } = rulesModal;
+  const {
+    element: rulesModalElement,
+    open: openRulesModal,
+    close: closeRulesModal,
+    closeButton: rulesModalCloseButton,
+    rulesContainer,
+    solverContainer,
+    setActiveTab: setRulesModalTab,
+  } = rulesModal;
   container.appendChild(rulesModalElement);
 
   planBody.append(
@@ -185,7 +242,6 @@ export function createPlanView() {
     createField('Kommentar', commentInput),
     createField('Stundenverteilung', versionSelect),
     createField('Regelprofil', ruleProfileSelect),
-    createParamsAccordion(),
     createButtonRow([generateButton, saveButton, rulesButton]),
   );
 
@@ -216,10 +272,26 @@ export function createPlanView() {
   rulesButtonSecondary.addEventListener('click', () => {
     syncRuleControls();
     updateRulesSummary();
-    openRulesModal();
+    openRulesModal('rules');
   });
 
-  rulesSummaryBody.append(rulesSummaryText, rulesProfileBadge, rulesOverridesBadge, rulesSummaryInfo, rulesButtonSecondary);
+  const solverButtonSecondary = document.createElement('button');
+  solverButtonSecondary.type = 'button';
+  solverButtonSecondary.className = 'btn btn-sm btn-outline';
+  solverButtonSecondary.textContent = 'Solver anpassen';
+  solverButtonSecondary.addEventListener('click', () => {
+    syncRuleControls();
+    updateRulesSummary();
+    openRulesModal('solver');
+  });
+
+  rulesSummaryBody.append(
+    rulesSummaryText,
+    rulesProfileBadge,
+    rulesOverridesBadge,
+    rulesSummaryInfo,
+    createButtonRow([rulesButtonSecondary, solverButtonSecondary]),
+  );
 
   planNameInput.addEventListener('blur', () => {
     state.planName = planNameInput.value.trim() || defaultPlanName();
@@ -283,13 +355,17 @@ export function createPlanView() {
   rulesButton.addEventListener('click', () => {
     syncRuleControls();
     updateRulesSummary();
-    openRulesModal();
+    openRulesModal('rules');
   });
 
-  rulesModalCloseButton.addEventListener('click', closeRulesModal);
+  rulesModalCloseButton.addEventListener('click', () => {
+    closeRulesModal();
+    setRulesModalTab('rules');
+  });
   rulesModalElement.addEventListener('cancel', event => {
     event.preventDefault();
     closeRulesModal();
+    setRulesModalTab('rules');
   });
 
   debugButton.addEventListener('click', async () => {
@@ -331,10 +407,12 @@ export function createPlanView() {
 
       planNameInput.value = state.planName;
       commentInput.value = state.planComment;
-      renderVersionOptions();
-      renderRuleProfiles();
       initializeRuleValues();
+      loadPersistedRuleDefaults();
+      renderRuleProfiles();
       renderRules();
+      renderSolverControls();
+      renderVersionOptions();
       syncRuleControls();
       syncParamControls();
       renderResults();
@@ -408,39 +486,79 @@ export function createPlanView() {
     });
   }
 
+  function loadPersistedRuleDefaults() {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    try {
+      const raw = window.localStorage.getItem(RULE_DEFAULTS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.bools && typeof parsed.bools === 'object') {
+          Object.entries(parsed.bools).forEach(([key, value]) => {
+            if (!state.ruleDefinitionByKey.has(key)) return;
+            const boolVal = value === true || value === 'true' || value === 1 || value === '1';
+            state.ruleBaseBools.set(key, boolVal);
+            state.ruleValuesBools.set(key, boolVal);
+          });
+        }
+        if (parsed.weights && typeof parsed.weights === 'object') {
+          Object.entries(parsed.weights).forEach(([key, value]) => {
+            if (!state.ruleDefinitionByKey.has(key)) return;
+            const numeric = Number(value);
+            if (Number.isNaN(numeric)) return;
+            state.ruleBaseWeights.set(key, numeric);
+            state.ruleValuesWeights.set(key, numeric);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Regel-Defaults konnten nicht geladen werden:', err);
+    }
+  }
+
+  function persistRuleDefaults() {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const payload = {
+      bools: Object.fromEntries(state.ruleValuesBools),
+      weights: Object.fromEntries(state.ruleValuesWeights),
+    };
+    try {
+      window.localStorage.setItem(RULE_DEFAULTS_STORAGE_KEY, JSON.stringify(payload));
+    } catch (err) {
+      console.warn('Regel-Defaults konnten nicht gespeichert werden:', err);
+    }
+    state.ruleBaseBools = new Map(state.ruleValuesBools);
+    state.ruleBaseWeights = new Map(state.ruleValuesWeights);
+  }
+
   function applyRuleProfile() {
     initializeRuleValues();
     if (!state.selectedRuleProfileId) {
-      syncRuleControls();
-      updateRulesSummary();
-      return;
-    }
-    const profile = state.ruleProfiles.find(p => p.id === state.selectedRuleProfileId);
-    if (!profile) {
-      syncRuleControls();
-      return;
-    }
-    if (state.rulesDefinition) {
-      state.rulesDefinition.bools.forEach(rule => {
-        if (profile[rule.key] !== undefined) {
-          const value = !!profile[rule.key];
-          state.ruleBaseBools.set(rule.key, value);
-          state.ruleValuesBools.set(rule.key, value);
+      loadPersistedRuleDefaults();
+    } else {
+      const profile = state.ruleProfiles.find(p => p.id === state.selectedRuleProfileId);
+      if (profile && state.rulesDefinition) {
+        state.rulesDefinition.bools.forEach(rule => {
+          if (profile[rule.key] !== undefined) {
+            const value = !!profile[rule.key];
+            state.ruleBaseBools.set(rule.key, value);
+            state.ruleValuesBools.set(rule.key, value);
+          }
+        });
+        const hasBandToggle = state.rulesDefinition.bools.some(rule => rule.key === 'bandstunden_parallel');
+        if (hasBandToggle && profile.leseband_parallel !== undefined && !state.ruleValuesBools.has('bandstunden_parallel')) {
+          const value = !!profile.leseband_parallel;
+          state.ruleBaseBools.set('bandstunden_parallel', value);
+          state.ruleValuesBools.set('bandstunden_parallel', value);
         }
-      });
-      const hasBandToggle = state.rulesDefinition.bools.some(rule => rule.key === 'bandstunden_parallel');
-      if (hasBandToggle && profile.leseband_parallel !== undefined && !state.ruleValuesBools.has('bandstunden_parallel')) {
-        const value = !!profile.leseband_parallel;
-        state.ruleBaseBools.set('bandstunden_parallel', value);
-        state.ruleValuesBools.set('bandstunden_parallel', value);
+        state.rulesDefinition.weights.forEach(rule => {
+          if (profile[rule.key] !== undefined) {
+            const value = Number(profile[rule.key]);
+            state.ruleBaseWeights.set(rule.key, value);
+            state.ruleValuesWeights.set(rule.key, value);
+          }
+        });
       }
-      state.rulesDefinition.weights.forEach(rule => {
-        if (profile[rule.key] !== undefined) {
-          const value = Number(profile[rule.key]);
-          state.ruleBaseWeights.set(rule.key, value);
-          state.ruleValuesWeights.set(rule.key, value);
-        }
-      });
     }
     updateRulesSummary();
   }
@@ -448,98 +566,200 @@ export function createPlanView() {
   function renderRules() {
     state.boolInputs.clear();
     state.weightInputs.clear();
-    boolsContainer.innerHTML = '';
-    weightsContainer.innerHTML = '';
-    if (!state.rulesDefinition) return;
+    state.ruleExtraContainers.clear();
+    if (!state.rulesDefinition) {
+      rulesContainer.innerHTML = '<p class="text-sm opacity-70">Keine Regeln geladen.</p>';
+      return;
+    }
 
-    state.rulesDefinition.bools.forEach(rule => {
-      const row = document.createElement('label');
-      row.className = 'flex items-center justify-between gap-3 p-3 rounded-lg border border-base-200 hover:border-base-300 transition';
-      const info = document.createElement('div');
-      info.className = 'flex flex-col';
-      const title = document.createElement('span');
-      title.className = 'font-medium text-sm';
-      title.textContent = rule.label || rule.key;
-      info.appendChild(title);
-      if (rule.info) {
-        const desc = document.createElement('span');
-        desc.className = 'text-xs opacity-70';
-        desc.textContent = rule.info;
-        info.appendChild(desc);
-      }
-      const toggle = document.createElement('input');
-      toggle.type = 'checkbox';
-      toggle.className = 'toggle toggle-primary';
-      toggle.dataset.ruleKey = rule.key;
-      toggle.addEventListener('change', () => {
-        state.ruleValuesBools.set(rule.key, toggle.checked);
-        updateRulesSummary();
-        markDebugStale();
-      });
-      row.append(info, toggle);
-      boolsContainer.appendChild(row);
-      state.boolInputs.set(rule.key, toggle);
-    });
+    rulesContainer.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'grid gap-6 lg:grid-cols-2';
 
-    state.rulesDefinition.weights.forEach(rule => {
-      const wrap = document.createElement('div');
-      wrap.className = 'space-y-2';
-      const label = document.createElement('div');
-      label.className = 'flex items-center justify-between text-sm font-medium';
-      label.innerHTML = `<span>${rule.label || rule.key}</span><span data-weight-label="${rule.key}"></span>`;
+    RULE_GROUPS.forEach(group => {
+      const availableKeys = group.keys.filter(key => state.ruleDefinitionByKey.has(key));
+      if (!availableKeys.length) return;
 
-      const range = document.createElement('input');
-      range.type = 'range';
-      range.className = 'range range-primary range-sm';
-      range.min = rule.min ?? 0;
-      range.max = rule.max ?? 50;
-      range.step = 1;
-      range.dataset.ruleKey = rule.key;
+      const card = document.createElement('article');
+      card.className = 'border border-base-200 rounded-xl bg-base-100 shadow-sm';
+      const body = document.createElement('div');
+      body.className = 'p-4 space-y-4';
 
-      const number = document.createElement('input');
-      number.type = 'number';
-      number.className = 'input input-sm input-bordered w-24';
-      number.min = rule.min ?? 0;
-      number.max = rule.max ?? 50;
-      number.step = 1;
-      number.dataset.ruleKey = rule.key;
-
-      range.addEventListener('input', () => {
-        const value = Number(range.value);
-        state.ruleValuesWeights.set(rule.key, value);
-        number.value = String(value);
-        updateWeightLabel(rule.key, value);
-        updateRulesSummary();
-        markDebugStale();
-      });
-
-      number.addEventListener('change', () => {
-        let value = Number(number.value);
-        if (Number.isNaN(value)) value = state.ruleValuesWeights.get(rule.key) || rule.default;
-        value = Math.max(rule.min ?? 0, Math.min(rule.max ?? 50, value));
-        state.ruleValuesWeights.set(rule.key, value);
-        range.value = String(value);
-        number.value = String(value);
-        updateWeightLabel(rule.key, value);
-        updateRulesSummary();
-        markDebugStale();
-      });
-
-      wrap.appendChild(label);
-      if (rule.info) {
+      const header = document.createElement('div');
+      header.className = 'space-y-1';
+      const heading = document.createElement('h3');
+      heading.className = 'text-sm font-semibold uppercase tracking-wide';
+      heading.textContent = group.label;
+      header.appendChild(heading);
+      if (group.description) {
         const desc = document.createElement('p');
         desc.className = 'text-xs opacity-70';
-        desc.textContent = rule.info;
-        wrap.appendChild(desc);
+        desc.textContent = group.description;
+        header.appendChild(desc);
       }
-      wrap.append(range, number);
-      weightsContainer.appendChild(wrap);
-      state.weightInputs.set(rule.key, { range, number });
+      body.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'space-y-3';
+      availableKeys.forEach(key => {
+        const entry = createRuleEntry(key);
+        if (entry) list.appendChild(entry);
+      });
+
+      if (!list.childElementCount) return;
+      body.appendChild(list);
+      card.appendChild(body);
+      grid.appendChild(card);
     });
+
+    if (!grid.childElementCount) {
+      const note = document.createElement('p');
+      note.className = 'text-sm opacity-70';
+      note.textContent = 'Keine Regeln verfügbar.';
+      rulesContainer.appendChild(note);
+    } else {
+      rulesContainer.appendChild(grid);
+    }
 
     syncRuleControls();
     loadAnalysis().then(renderAnalysis).catch(() => {});
-    updateRulesSummary();
+  }
+
+  function createRuleEntry(ruleKey) {
+    const ruleDef = state.ruleDefinitionByKey.get(ruleKey);
+    if (!ruleDef) return null;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'space-y-2 rounded-lg border border-base-200 bg-base-100/70 p-3';
+
+    const header = document.createElement('div');
+    header.className = 'flex items-start justify-between gap-3';
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'space-y-1';
+    const title = document.createElement('span');
+    title.className = 'font-medium text-sm';
+    title.textContent = ruleDef.label || ruleKey;
+    textWrap.appendChild(title);
+    if (ruleDef.info) {
+      const desc = document.createElement('p');
+      desc.className = 'text-xs opacity-70';
+      desc.textContent = ruleDef.info;
+      textWrap.appendChild(desc);
+    }
+
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.className = 'toggle toggle-primary';
+    toggle.dataset.ruleKey = ruleKey;
+    toggle.addEventListener('change', () => {
+      state.ruleValuesBools.set(ruleKey, toggle.checked);
+      updateExtraContainerState(ruleKey, toggle.checked);
+      updateRulesSummary();
+      markDebugStale();
+    });
+
+    header.append(textWrap, toggle);
+    wrapper.appendChild(header);
+    state.boolInputs.set(ruleKey, toggle);
+
+    const extraKeys = RULE_EXTRAS[ruleKey] || [];
+    if (extraKeys.length) {
+      const extras = document.createElement('div');
+      extras.className = 'space-y-3 border-l border-base-200 pl-4';
+      extraKeys.forEach(weightKey => {
+        const control = createInlineWeightControl(weightKey);
+        if (control) extras.appendChild(control);
+      });
+      if (extras.childElementCount) {
+        wrapper.appendChild(extras);
+        state.ruleExtraContainers.set(ruleKey, extras);
+      }
+    }
+
+    return wrapper;
+  }
+
+  function createInlineWeightControl(weightKey) {
+    const weightDef = state.ruleDefinitionByKey.get(weightKey);
+    if (!weightDef) return null;
+
+    const block = document.createElement('div');
+    block.className = 'space-y-1';
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'flex items-center justify-between text-xs font-medium';
+    const labelText = document.createElement('span');
+    labelText.textContent = weightDef.label || weightKey;
+    const valueLabel = document.createElement('span');
+    valueLabel.className = 'text-xs opacity-70';
+    labelRow.append(labelText, valueLabel);
+    block.appendChild(labelRow);
+
+    if (weightDef.info) {
+      const info = document.createElement('p');
+      info.className = 'text-xs opacity-60';
+      info.textContent = weightDef.info;
+      block.appendChild(info);
+    }
+
+    const controls = document.createElement('div');
+    controls.className = 'flex items-center gap-2';
+
+    const min = weightDef.min ?? 0;
+    const max = weightDef.max ?? 50;
+
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.className = 'range range-primary range-xs flex-1';
+    range.min = String(min);
+    range.max = String(max);
+    range.step = 1;
+
+    const number = document.createElement('input');
+    number.type = 'number';
+    number.className = 'input input-xs input-bordered w-20';
+    number.min = String(min);
+    number.max = String(max);
+    number.step = '1';
+
+    controls.append(range, number);
+    block.appendChild(controls);
+
+    state.weightInputs.set(weightKey, { range, number, valueLabel });
+
+    const applyValue = value => {
+      state.ruleValuesWeights.set(weightKey, value);
+      range.value = String(value);
+      number.value = String(value);
+      valueLabel.textContent = String(value);
+      updateRulesSummary();
+      markDebugStale();
+    };
+
+    range.addEventListener('input', () => {
+      const value = Number(range.value);
+      applyValue(value);
+    });
+
+    number.addEventListener('change', () => {
+      let value = Number(number.value);
+      if (Number.isNaN(value)) value = state.ruleValuesWeights.get(weightKey) ?? weightDef.default ?? min;
+      value = Math.max(min, Math.min(max, value));
+      applyValue(value);
+    });
+
+    return block;
+  }
+
+  function updateExtraContainerState(ruleKey, enabled) {
+    const container = state.ruleExtraContainers.get(ruleKey);
+    if (!container) return;
+    if (enabled) {
+      container.classList.remove('opacity-40', 'pointer-events-none');
+    } else {
+      container.classList.add('opacity-40', 'pointer-events-none');
+    }
   }
 
   function syncRuleControls() {
@@ -549,23 +769,56 @@ export function createPlanView() {
       const input = state.boolInputs.get(rule.key);
       if (input) {
         input.checked = !!value;
+        updateExtraContainerState(rule.key, !!value);
       }
     });
     state.rulesDefinition.weights.forEach(rule => {
       const value = state.ruleValuesWeights.get(rule.key);
       const entry = state.weightInputs.get(rule.key);
       if (entry) {
-        entry.range.value = String(value ?? rule.default ?? 0);
-        entry.number.value = String(value ?? rule.default ?? 0);
-        updateWeightLabel(rule.key, value ?? rule.default ?? 0);
+        const resolved = value ?? rule.default ?? 0;
+        entry.range.value = String(resolved);
+        entry.number.value = String(resolved);
+        if (entry.valueLabel) entry.valueLabel.textContent = String(resolved);
       }
     });
     syncParamControls();
   }
 
-  function updateWeightLabel(key, value) {
-    const label = weightsContainer.querySelector(`[data-weight-label="${key}"]`);
-    if (label) label.textContent = `${value}`;
+  function renderSolverControls() {
+    if (!solverContainer) return;
+    solverContainer.innerHTML = '';
+    state.paramInputs = new Map();
+
+    const intro = document.createElement('p');
+    intro.className = 'text-sm opacity-70';
+    intro.textContent = 'Feintuning der OR-Tools-Suche – wirkt sich auf Laufzeit und Ergebnisqualität aus.';
+    solverContainer.appendChild(intro);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid gap-4 lg:grid-cols-2';
+
+    const columnA = document.createElement('div');
+    columnA.className = 'space-y-3';
+    columnA.append(
+      createParamRowCheckbox('Mehrfach-Start', 'Mehrere Startläufe mit unterschiedlichen Seeds', 'multi_start'),
+      createParamRowNumber('Max. Versuche', 'Anzahl Startläufe (nur bei Mehrfach-Start)', 'max_attempts', { min: 1, max: 200, step: 1 }),
+      createParamRowNumber('Geduld', 'Abbruch nach so vielen erfolglosen Läufen', 'patience', { min: 1, max: 50, step: 1 }),
+      createParamRowNumber('Zeit pro Versuch (s)', 'Maximale Solver-Zeit pro Versuch', 'time_per_attempt', { min: 1, max: 600, step: 0.5 }),
+    );
+
+    const columnB = document.createElement('div');
+    columnB.className = 'space-y-3';
+    columnB.append(
+      createParamRowCheckbox('Zufallssuche', 'Zufallsheuristiken aktivieren', 'randomize_search'),
+      createParamRowNumber('Basis-Seed', 'Startwert für Zufallszahlen', 'base_seed', { step: 1 }),
+      createParamRowNumber('Seed-Schritt', 'Offset für weitere Versuche', 'seed_step', { step: 1 }),
+      createParamRowCheckbox('Value Hints', 'Startwerte für Slots vorgeben', 'use_value_hints'),
+    );
+
+    grid.append(columnA, columnB);
+    solverContainer.appendChild(grid);
+    syncParamControls();
   }
 
   function syncParamControls() {
@@ -619,6 +872,7 @@ export function createPlanView() {
       state.lastPlanId = planEntry.id;
       saveButton.disabled = false;
       renderResults();
+      persistRuleDefaults();
       updateRulesSummary();
       await loadAnalysis();
       if (state.activeTab === 'analysis') {
@@ -1084,38 +1338,50 @@ export function createPlanView() {
     dialog.className = 'modal';
 
     const box = document.createElement('div');
-    box.className = 'modal-box max-w-3xl space-y-4';
+    box.className = 'modal-box space-y-6';
+    box.style.width = '90vw';
+    box.style.maxWidth = '1200px';
 
     const headerRow = document.createElement('div');
     headerRow.className = 'flex items-center justify-between gap-3';
     const title = document.createElement('h3');
     title.className = 'font-semibold text-lg';
-    title.textContent = 'Regelkonfiguration';
+    title.textContent = 'Regel- und Solver-Einstellungen';
     const closeButton = document.createElement('button');
     closeButton.type = 'button';
     closeButton.className = 'btn btn-sm btn-circle btn-ghost';
     closeButton.textContent = '✕';
     headerRow.append(title, closeButton);
 
-    const boolsHeading = document.createElement('h4');
-    boolsHeading.className = 'text-sm font-semibold uppercase opacity-60';
-    boolsHeading.textContent = 'Regeln';
+    const tabNav = document.createElement('div');
+    tabNav.className = 'tabs tabs-boxed w-fit';
+    const rulesTabButton = document.createElement('a');
+    rulesTabButton.className = 'tab tab-active';
+    rulesTabButton.textContent = 'Regeln';
+    const solverTabButton = document.createElement('a');
+    solverTabButton.className = 'tab';
+    solverTabButton.textContent = 'Solver';
+    tabNav.append(rulesTabButton, solverTabButton);
 
-    const boolsContainer = document.createElement('div');
-    boolsContainer.className = 'space-y-3';
+    const rulesContainer = document.createElement('div');
+    rulesContainer.className = 'space-y-6';
 
-    const weightsHeading = document.createElement('h4');
-    weightsHeading.className = 'text-sm font-semibold uppercase opacity-60';
-    weightsHeading.textContent = 'Gewichtungen';
+    const solverContainer = document.createElement('div');
+    solverContainer.className = 'space-y-4 hidden';
 
-    const weightsContainer = document.createElement('div');
-    weightsContainer.className = 'space-y-4';
+    const footer = document.createElement('div');
+    footer.className = 'modal-action';
+    const closeAction = document.createElement('button');
+    closeAction.type = 'button';
+    closeAction.className = 'btn';
+    closeAction.textContent = 'Schließen';
+    closeAction.addEventListener('click', () => {
+      dialog.close();
+      setActiveTab('rules');
+    });
+    footer.appendChild(closeAction);
 
-    const hint = document.createElement('p');
-    hint.className = 'text-xs opacity-60';
-    hint.textContent = 'Änderungen gelten nur für die nächste Planberechnung.';
-
-    box.append(headerRow, boolsHeading, boolsContainer, weightsHeading, weightsContainer, hint);
+    box.append(headerRow, tabNav, rulesContainer, solverContainer, footer);
 
     const backdrop = document.createElement('form');
     backdrop.method = 'dialog';
@@ -1126,17 +1392,40 @@ export function createPlanView() {
 
     dialog.append(box, backdrop);
 
+    function setActiveTab(id) {
+      if (id === 'solver') {
+        rulesTabButton.classList.remove('tab-active');
+        solverTabButton.classList.add('tab-active');
+        rulesContainer.classList.add('hidden');
+        solverContainer.classList.remove('hidden');
+      } else {
+        solverTabButton.classList.remove('tab-active');
+        rulesTabButton.classList.add('tab-active');
+        solverContainer.classList.add('hidden');
+        rulesContainer.classList.remove('hidden');
+      }
+    }
+
+    rulesTabButton.addEventListener('click', () => setActiveTab('rules'));
+    solverTabButton.addEventListener('click', () => setActiveTab('solver'));
+    closeButton.addEventListener('click', () => {
+      dialog.close();
+      setActiveTab('rules');
+    });
+
     return {
       element: dialog,
-      boolsContainer,
-      weightsContainer,
+      rulesContainer,
+      solverContainer,
       closeButton,
-      open() {
+      open(defaultTab = 'rules') {
+        setActiveTab(defaultTab);
         dialog.showModal();
       },
       close() {
         dialog.close();
       },
+      setActiveTab,
     };
   }
 
@@ -1145,31 +1434,6 @@ export function createPlanView() {
     renderResults();
     renderAnalysis();
   });
-
-  function createParamsAccordion() {
-    const wrap = document.createElement('details');
-    wrap.className = 'collapse bg-base-200/60';
-
-    const summary = document.createElement('summary');
-    summary.className = 'collapse-title text-sm font-medium cursor-pointer';
-    summary.textContent = 'Solver-Parameter';
-
-    const content = document.createElement('div');
-    content.className = 'collapse-content space-y-4';
-
-    content.appendChild(createParamRowCheckbox('Mehrfach-Start', 'Mehrere Startläufe mit unterschiedlichen Seeds', 'multi_start'));
-    content.appendChild(createParamRowNumber('Max. Versuche', 'Anzahl Startläufe (nur bei Mehrfach-Start)', 'max_attempts', { min: 1, max: 100, step: 1 }));
-    content.appendChild(createParamRowNumber('Geduld', 'Abbruch nach so vielen erfolglosen Läufen', 'patience', { min: 1, max: 20, step: 1 }));
-    content.appendChild(createParamRowNumber('Zeit pro Versuch (s)', 'Maximale Solver-Zeit pro Versuch', 'time_per_attempt', { min: 1, max: 600, step: 0.5 }));
-    content.appendChild(createParamRowCheckbox('Zufallssuche', 'Zufallsheuristiken aktivieren', 'randomize_search'));
-    content.appendChild(createParamRowNumber('Basis-Seed', 'Startwert für Zufallszahlen', 'base_seed', { step: 1 }));
-    content.appendChild(createParamRowNumber('Seed-Schritt', 'Offset für weitere Versuche', 'seed_step', { step: 1 }));
-    content.appendChild(createParamRowCheckbox('Value Hints', 'Startwerte für Slots vorgeben', 'use_value_hints'));
-
-    wrap.append(summary, content);
-    syncParamControls();
-    return wrap;
-  }
 
   function createParamRowCheckbox(label, hint, key) {
     const row = document.createElement('label');
@@ -1189,6 +1453,7 @@ export function createPlanView() {
     toggle.checked = !!state.params[key];
     toggle.addEventListener('change', () => {
       state.params[key] = toggle.checked;
+      updateRulesSummary();
       markDebugStale();
     });
     row.append(info, toggle);
@@ -1224,6 +1489,7 @@ export function createPlanView() {
       }
       state.params[key] = value;
       input.value = String(value);
+      updateRulesSummary();
       markDebugStale();
     });
     row.append(heading, sub, input);

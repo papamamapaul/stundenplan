@@ -66,7 +66,7 @@ uvicorn backend.app.main:app --reload
 - **Flexible Gruppen**: Je Gruppe (fach-zu-klasse) wird `sum(slots) == 1` hinzugefügt *(Toggle `basisplan_flexible`)*.
 - **Klassen-Zeitfenster**: Basisplan-„Allowed“-Raster sperrt Slots pro Klasse *(Toggle `basisplan_windows`)*.
 - **Bandfächer**: Alle Fächer mit `is_bandfach` werden parallel über die beteiligten Klassen gelegt *(Toggle `bandstunden_parallel`)*.
-- **Globale Regeln**: Tageslimit, Mittagsschule, Nachmittags-Verbote etc. lassen sich vollständig deaktivieren (`stundenbegrenzung`, `nachmittag_regel`, `mittagsschule_vormittag`, `fach_nachmittag_regeln`).
+- **Globale Regeln**: Tageslimit, Vormittagsminimum, Nachmittags-Vorgaben etc. lassen sich vollständig deaktivieren (`stundenbegrenzung`, `mittagsschule_vormittag`, `fach_nachmittag_regeln`).
 - **Konfliktfreiheit**: Lehrkraft-/Klassen-Kollisionen, Stundenbedarf und Raumfenster sind explizit schaltbar (`keine_lehrerkonflikte`, `keine_klassenkonflikte`, `stundenbedarf_vollstaendig`, `raum_verfuegbarkeit`).
 - **Soft-Ziele**: Gewichte bleiben über `W_*` manipulierbar; `gleichverteilung` und Hohlstunden-Schalter definieren, ob sie aktiv sind.
 - **AG/Förder**: Kennzeichnung in Requirements; keine speziellen Constraints, aber Analyse/Plananzeige weisen darauf hin.

@@ -94,12 +94,6 @@ def list_rules() -> dict:
                 "info": "Wenn der Tag voll ist, wird die erste Stunde automatisch belegt.",
             },
             {
-                "key": "nachmittag_regel",
-                "label": "Nachmittag nur Di (globale Regel)",
-                "default": True,
-                "info": "Erlaubt Unterricht nach der 6. Stunde nur am Dienstag.",
-            },
-            {
                 "key": "fach_nachmittag_regeln",
                 "label": "Fachspezifische Nachmittag-Regeln anwenden",
                 "default": True,
@@ -110,6 +104,12 @@ def list_rules() -> dict:
                 "label": "Nachmittag mit freier 6. Stunde",
                 "default": False,
                 "info": "Ist Unterricht am Nachmittag geplant, bleibt die 6. Stunde frei.",
+            },
+            {
+                "key": "lehrer_hohlstunden_soft",
+                "label": "Lehrer-Hohlstunden (Soft)",
+                "default": True,
+                "info": "Versucht Hohlstunden für Lehrkräfte zu vermeiden und straft Überschreitungen weich ab.",
             },
             {
                 "key": "keine_hohlstunden",
@@ -186,6 +186,30 @@ def list_rules() -> dict:
                 "min": 0,
                 "max": 50,
                 "info": "Penalty für Einzelstunden, wenn Doppelstunden optional erlaubt sind.",
+            },
+            {
+                "key": "TEACHER_GAPS_DAY_MAX",
+                "label": "Lehrer-Lücken pro Tag",
+                "default": 1,
+                "min": 0,
+                "max": 6,
+                "info": "Zulässige Anzahl an Hohlstunden pro Lehrkraft und Tag, bevor Strafpunkte greifen.",
+            },
+            {
+                "key": "TEACHER_GAPS_WEEK_MAX",
+                "label": "Lehrer-Lücken pro Woche",
+                "default": 3,
+                "min": 0,
+                "max": 20,
+                "info": "Zulässige Hohlstunden pro Lehrkraft und Woche.",
+            },
+            {
+                "key": "W_TEACHER_GAPS",
+                "label": "Gewicht Lehrer-Hohlstunden",
+                "default": 2,
+                "min": 0,
+                "max": 50,
+                "info": "Strafgewicht für Lehrkräfte-Hohlstunden über den erlaubten Grenzen.",
             },
         ],
     }

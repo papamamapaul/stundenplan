@@ -38,17 +38,18 @@ def add_constraints(
       - stundenbegrenzung_erste_stunde (bool)
       - keine_hohlstunden (bool)            -> Soft (empfohlen)
       - keine_hohlstunden_hard (bool)       -> Hard (optional)
-      - nachmittag_regel (bool)              -> Nachmittag nur Di (Std 7/8)
       - fach_nachmittag_regeln (bool)        -> nutzt Requirement 'Nachmittag'
       - nachmittag_pause_stunde (bool)
       - doppelstundenregel (bool)
       - einzelstunde_nur_rand (bool)
       - bandstunden_parallel (bool)         # Alias leseband_parallel
       - gleichverteilung (bool)
+      - lehrer_hohlstunden_soft (bool)      -> Soft-Penalty für Lehrkräfte-Lücken
       - mittagsschule_vormittag (bool)       -> 4/≥5-Logik je Tag/Klasse
 
     Zusätzlich (NEU): Gewichte für Soft-Objectives – kommen aus regeln, haben Defaults:
       - W_GAPS_START, W_GAPS_INSIDE, W_EVEN_DIST, W_EINZEL_KANN
+      - TEACHER_GAPS_DAY_MAX, TEACHER_GAPS_WEEK_MAX, W_TEACHER_GAPS
     """
 
     def _str_val(row, col, default=""):
@@ -73,11 +74,15 @@ def add_constraints(
     enforce_class_windows = bool(regeln.get("basisplan_windows", True))
     enforce_day_limits = bool(regeln.get("stundenbegrenzung", True))
     enforce_first_slot = bool(regeln.get("stundenbegrenzung_erste_stunde", True))
-    enforce_global_afternoon = bool(regeln.get("nachmittag_regel", True))
     enforce_subject_afternoon = bool(regeln.get("fach_nachmittag_regeln", True))
     enforce_afternoon_break = bool(regeln.get("nachmittag_pause_stunde", False))
     enforce_midday_rule = bool(regeln.get("mittagsschule_vormittag", True))
     enforce_band_parallel = bool(regeln.get("bandstunden_parallel", regeln.get("leseband_parallel", True)))
+    enforce_teacher_gaps_soft = bool(regeln.get("lehrer_hohlstunden_soft", True))
+
+    teacher_gaps_day_max = max(0, int(regeln.get("TEACHER_GAPS_DAY_MAX", 1)))
+    teacher_gaps_week_max = max(0, int(regeln.get("TEACHER_GAPS_WEEK_MAX", 3)))
+    W_TEACHER_GAPS = int(regeln.get("W_TEACHER_GAPS", 2))
 
     # -------- 1) Jede Fachstunde MUSS platziert werden --------
     for fid in FACH_ID:
@@ -191,14 +196,7 @@ def add_constraints(
                     if first_slot:
                         model.Add(sum(first_slot) == 1).OnlyEnforceIf(must_first)
 
-    # -------- 4) Nachmittag grundsätzlich nur Dienstag (Std 7/8 = Index 6/7) --------
-    if enforce_global_afternoon:
-        for tag in ['Mo', 'Mi', 'Do', 'Fr']:
-            for std in (6, 7):
-                for fid in FACH_ID:
-                    model.Add(plan[(fid, tag, std)] == 0)
-
-    # -------- 5) Hohlstunden: Soft- oder Hard-Variante --------
+    # -------- 4) Hohlstunden: Soft- oder Hard-Variante --------
     def _occ_vars_for_klasse_tag(klasse, tag, max_slots=8):
         occ = [model.NewBoolVar(f"occ_{klasse}_{tag}_{s}") for s in range(max_slots)]
         for s in range(max_slots):
@@ -260,6 +258,71 @@ def add_constraints(
             for tag in TAGE:
                 occ = _occ_vars_for_klasse_tag(klasse, tag, max_slots=8)
                 obj_terms += _add_no_gap_soft(occ)
+
+    # -------- 6b) Lehrer-Hohlstunden (Soft) --------
+    if enforce_teacher_gaps_soft and W_TEACHER_GAPS > 0:
+        teacher_index = {name: idx for idx, name in enumerate(LEHRER)}
+        max_day_gaps = min(7, max(0, teacher_gaps_day_max))
+        max_week_gaps = max(0, teacher_gaps_week_max)
+
+        for lehrer in LEHRER:
+            idx = teacher_index[lehrer]
+            week_gap_vars = []
+            for tag in TAGE:
+                occ = []
+                for std in range(8):
+                    occ_var = model.NewBoolVar(f"tocc_{idx}_{tag}_{std}")
+                    slots = [plan[(fid, tag, std)] for fid in FACH_ID if df.loc[fid, 'Lehrer'] == lehrer]
+                    if slots:
+                        model.Add(sum(slots) >= occ_var)
+                        model.Add(sum(slots) <= len(slots) * occ_var)
+                    else:
+                        model.Add(occ_var == 0)
+                    occ.append(occ_var)
+
+                segment_starts = []
+                for std in range(8):
+                    start_var = model.NewBoolVar(f"tseg_{idx}_{tag}_{std}")
+                    model.Add(start_var <= occ[std])
+                    if std == 0:
+                        model.Add(start_var == occ[std])
+                    else:
+                        model.Add(start_var <= 1 - occ[std - 1])
+                        model.Add(start_var >= occ[std] - occ[std - 1])
+                    segment_starts.append(start_var)
+
+                segments = model.NewIntVar(0, 8, f"tsegcount_{idx}_{tag}")
+                model.Add(segments == sum(segment_starts))
+
+                total_occ = model.NewIntVar(0, 8, f"tocc_total_{idx}_{tag}")
+                model.Add(total_occ == sum(occ))
+
+                has_teaching = model.NewBoolVar(f"tteach_{idx}_{tag}")
+                model.Add(total_occ >= 1).OnlyEnforceIf(has_teaching)
+                model.Add(total_occ == 0).OnlyEnforceIf(has_teaching.Not())
+
+                gaps_var = model.NewIntVar(0, 7, f"tgaps_{idx}_{tag}")
+                model.Add(gaps_var == 0).OnlyEnforceIf(has_teaching.Not())
+                model.Add(segments == 0).OnlyEnforceIf(has_teaching.Not())
+                model.Add(gaps_var + 1 == segments).OnlyEnforceIf(has_teaching)
+                model.Add(segments >= 1).OnlyEnforceIf(has_teaching)
+
+                week_gap_vars.append(gaps_var)
+
+                excess_day = model.NewIntVar(0, 7, f"tgap_excess_day_{idx}_{tag}")
+                model.Add(excess_day >= gaps_var - max_day_gaps)
+                model.Add(excess_day >= 0)
+                model.Add(excess_day <= gaps_var)
+                obj_terms.append(W_TEACHER_GAPS * excess_day)
+
+            if week_gap_vars:
+                week_total = model.NewIntVar(0, len(TAGE) * 7, f"tgap_week_total_{idx}")
+                model.Add(week_total == sum(week_gap_vars))
+                excess_week = model.NewIntVar(0, len(TAGE) * 7, f"tgap_excess_week_{idx}")
+                model.Add(excess_week >= week_total - max_week_gaps)
+                model.Add(excess_week >= 0)
+                model.Add(excess_week <= week_total)
+                obj_terms.append(W_TEACHER_GAPS * excess_week)
 
     # -------- 6) Doppelstunden 'muss/kann/nein' inkl. max. 2 in Folge --------
     if regeln.get("doppelstundenregel", True):
