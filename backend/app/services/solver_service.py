@@ -17,7 +17,9 @@ if not solver_logger.handlers:
     solver_logger.addHandler(handler)
 solver_logger.setLevel(logging.DEBUG)
 solver_logger.propagate = True
-from ..models import Requirement, Subject, Teacher, Class, Room
+from sqlalchemy import text
+
+from ..models import Requirement, RequirementParticipationEnum, Subject, Teacher, Class, Room
 from ..utils import TAGE
 
 
@@ -38,6 +40,7 @@ def _rules_to_dict(rule_profile: Dict[str, int | bool] | None) -> Dict[str, int 
 
 
 def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = None) -> Tuple[pd.DataFrame, List[int], List[str], List[str]]:
+    _ensure_solver_schema(session)
     # Holt Requirements + Namen und baut das Erwartungs-DF
     stmt = select(Requirement)
     if version_id is not None:
@@ -54,14 +57,32 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
     rooms = {r.id: r.name for r in room_rows}
     subject_band = {s.id: bool(s.is_bandfach) for s in subject_rows}
     subject_ag = {s.id: bool(s.is_ag_foerder) for s in subject_rows}
+    subject_alias = {s.id: s.alias_subject_id for s in subject_rows}
     teachers = {t.id: t.name for t in session.exec(select(Teacher)).all()}
     classes = {c.id: c.name for c in session.exec(select(Class)).all()}
+
+    def _canonical_subject_id(subject_id: int) -> int:
+        seen = set()
+        current = subject_id
+        while subject_alias.get(current):
+            if current in seen:
+                break
+            seen.add(current)
+            alias_id = subject_alias.get(current)
+            if alias_id is None:
+                break
+            current = alias_id
+        return current
+
+    canonical_names = {sid: subjects.get(_canonical_subject_id(sid), subjects.get(sid, str(sid))) for sid in subjects.keys()}
 
     records = []
     for r in reqs:
         room_id = subject_room.get(r.subject_id)
         room_name = rooms.get(room_id) if room_id else None
         is_bandfach = subject_band.get(r.subject_id, False)
+        participation = r.participation.value if isinstance(r.participation, RequirementParticipationEnum) else RequirementParticipationEnum.curriculum.value
+        canonical_id = _canonical_subject_id(r.subject_id)
         record = {
             "Fach": subjects.get(r.subject_id, str(r.subject_id)),
             "Klasse": classes.get(r.class_id, str(r.class_id)),
@@ -71,6 +92,9 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
             "Nachmittag": r.nachmittag.value,
             "RoomID": room_id,
             "Room": room_name,
+            "Participation": participation,
+            "CanonicalSubjectId": canonical_id,
+            "CanonicalSubject": canonical_names.get(r.subject_id, subjects.get(r.subject_id, str(r.subject_id))),
         }
         record["Bandfach"] = bool(is_bandfach)
         record["AGFoerder"] = bool(subject_ag.get(r.subject_id, False))
@@ -81,6 +105,20 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
     KLASSEN = [str(x) for x in sorted(df["Klasse"].unique(), key=lambda v: int(str(v)) if str(v).isdigit() else str(v))]
     LEHRER = sorted(df["Lehrer"].astype(str).unique())
     return df, FACH_ID, KLASSEN, LEHRER
+
+
+def _ensure_solver_schema(session: Session) -> None:
+    info = session.exec(text("PRAGMA table_info(subject)"))
+    columns = {row[1] for row in info}
+    if "alias_subject_id" not in columns:
+        session.exec(text("ALTER TABLE subject ADD COLUMN alias_subject_id INTEGER"))
+        session.commit()
+
+    info_req = session.exec(text("PRAGMA table_info(requirement)"))
+    columns_req = {row[1] for row in info_req}
+    if "participation" not in columns_req:
+        session.exec(text("ALTER TABLE requirement ADD COLUMN participation TEXT DEFAULT 'curriculum'"))
+        session.commit()
 
 
 def solve_best_plan(

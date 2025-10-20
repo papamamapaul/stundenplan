@@ -112,12 +112,14 @@ class BackupSubject(BaseModel):
     required_room: Optional[str] = None
     is_bandfach: Optional[bool] = None
     is_ag_foerder: Optional[bool] = None
+    alias_subject: Optional[str] = None
 
 
 class BackupCurriculumItem(BaseModel):
     class_name: str
     subject_name: str
     wochenstunden: int
+    participation: Optional[str] = None
 
 
 class BackupRequirementItem(BaseModel):
@@ -128,6 +130,7 @@ class BackupRequirementItem(BaseModel):
     doppelstunde: Optional[str] = None  # "muss"|"kann"|"nein"
     nachmittag: Optional[str] = None    # "muss"|"kann"|"nein"
     version_name: Optional[str] = None
+    participation: Optional[str] = None
 
 
 class BackupRoom(BaseModel):

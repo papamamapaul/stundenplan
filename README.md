@@ -35,12 +35,12 @@ uvicorn backend.app.main:app --reload
 
 ### 2.2 Wichtige Modelle
 
-- **Subject**: enthält neben Raum/Default-Einstellungen jetzt `is_bandfach` und `is_ag_foerder`.
-- **Requirement**: `version_id` ermöglicht mehrere Stundenverteilungs-Versionen.
+- **Subject**: enthält neben Raum/Default-Einstellungen jetzt `is_bandfach`, `is_ag_foerder` sowie optional `alias_subject_id` (z. B. Leseband → Deutsch).
+- **Requirement**: `version_id` und `participation` (`curriculum`/`ag`) ermöglichen Curriculum- und AG-Stunden nebeneinander.
 - **BasisPlan**: `data` (JSON) verwaltet `windows`, `fixed` und `flexible`.  
   - `fixed`: fixe Slot-Zuweisungen (pro Klasse/Slot → Fach erzwingen)  
   - `flexible`: neue „Range“-Optionen (eine Menge alternativer Slots für ein Fach)
-- **Plan**: neben Score/Status nun `comment` und `version_id`.
+- **Plan**: neben Score/Status nun `comment`, `version_id` sowie Snapshots (`rules_snapshot`, `rule_keys_active`, `params_used`).
 
 ### 2.3 /plans-Workflow (vereinfacht)
 
@@ -65,11 +65,12 @@ uvicorn backend.app.main:app --reload
 - **Fixed Slots**: Jeder `(fid, tag, std)` wird als Hard Constraint `== 1` gesetzt *(Toggle `basisplan_fixed`)*.
 - **Flexible Gruppen**: Je Gruppe (fach-zu-klasse) wird `sum(slots) == 1` hinzugefügt *(Toggle `basisplan_flexible`)*.
 - **Klassen-Zeitfenster**: Basisplan-„Allowed“-Raster sperrt Slots pro Klasse *(Toggle `basisplan_windows`)*.
-- **Bandfächer**: Alle Fächer mit `is_bandfach` werden parallel über die beteiligten Klassen gelegt *(Toggle `bandstunden_parallel`)*.
+- **Bandfächer & AGs**: Alle Fächer mit `is_bandfach` werden parallel über die beteiligten Klassen gelegt *(Toggle `bandstunden_parallel`)*. Pflichtteilnehmer sitzen fest, optionale AG-Teilnehmer blocken andere Unterrichtsstunden ohne Pflichtbelegung.
+- **Alias-Fächer**: Über `alias_subject_id` geklammerte Fächer (z. B. Deutsch + Leseband) teilen sich Doppelstunden- und Tagesgrenzen.
 - **Globale Regeln**: Tageslimit, Vormittagsminimum, Nachmittags-Vorgaben etc. lassen sich vollständig deaktivieren (`stundenbegrenzung`, `mittagsschule_vormittag`, `fach_nachmittag_regeln`).
 - **Konfliktfreiheit**: Lehrkraft-/Klassen-Kollisionen, Stundenbedarf und Raumfenster sind explizit schaltbar (`keine_lehrerkonflikte`, `keine_klassenkonflikte`, `stundenbedarf_vollstaendig`, `raum_verfuegbarkeit`).
 - **Soft-Ziele**: Gewichte bleiben über `W_*` manipulierbar; `gleichverteilung` und Hohlstunden-Schalter definieren, ob sie aktiv sind.
-- **AG/Förder**: Kennzeichnung in Requirements; keine speziellen Constraints, aber Analyse/Plananzeige weisen darauf hin.
+- **AG/Förder**: Requirements können als `participation='ag'` markiert werden (z. B. Chor). Sie blocken Slots, ohne den Stundenbedarf hart zu erzwingen.
 - **Solver-Parameter**: Standardwerte in `GenerateParams`; Frontend kann inzwischen alle Felder überschreiben.
 
 ---

@@ -74,6 +74,11 @@ const NACHMITTAG_OPTIONS = [
   { value: 'nein', label: 'Kein Nachmittag' },
 ];
 
+const PARTICIPATION_OPTIONS = [
+  { value: 'curriculum', label: 'Pflicht (Curriculum)' },
+  { value: 'ag', label: 'Freiwillig (AG/Förder)' },
+];
+
 function labelForOption(options, value) {
   const opt = options.find(o => o.value === value);
   return opt ? opt.label : value;
@@ -130,7 +135,10 @@ function labelForOption(options, value) {
       state.teachers = teachers;
       state.classes = classes;
       state.subjects = subjects;
-      state.curriculum = curriculum;
+      state.curriculum = curriculum.map(entry => ({
+        ...entry,
+        participation: entry.participation || 'curriculum',
+      }));
       state.versions = versions;
       state.rooms = rooms;
       state.collapsedTeachers = new Set(
@@ -730,7 +738,7 @@ function labelForOption(options, value) {
                 teacherId: teacher.id,
                 classId: entry.classId,
                 subjectId: entry.subjectId,
-                count: entry.total || 0,
+                count: entry.mandatory || 0,
               };
               event.dataTransfer.effectAllowed = 'move';
               const payload = JSON.stringify(currentDragPayload);
@@ -774,7 +782,8 @@ function labelForOption(options, value) {
           const key = `${data.classId}|${data.subjectId}`;
           const info = remainingCache.get(key);
           if (!info || info.remaining == null || info.remaining < amount) return false;
-          return canAssignHour(teacher.id, data.classId, data.subjectId, remainingCache, teacherLoads, amount);
+          const isOptional = (info.participation || 'curriculum') === 'ag';
+          return canAssignHour(teacher.id, data.classId, data.subjectId, remainingCache, teacherLoads, amount, { isOptional });
         };
 
         dropZone.addEventListener('dragenter', event => {
@@ -890,13 +899,15 @@ function labelForOption(options, value) {
     return Array.from(remainingMap.values()).some(info => info.remaining > 0);
   }
 
-  function canAssignHour(teacherId, classId, subjectId, remainingMap, teacherLoads, amount = 1) {
+  function canAssignHour(teacherId, classId, subjectId, remainingMap, teacherLoads, amount = 1, options = {}) {
     const key = `${classId}|${subjectId}`;
     const info = remainingMap.get(key);
     if (!info || info.remaining == null || info.remaining < amount) return false;
     const load = teacherLoads.get(teacherId);
+    const isOptional = options.isOptional || (info?.participation || 'curriculum') === 'ag';
     if (!load) return true;
     if (!Number.isFinite(load.limit)) return true;
+    if (isOptional) return true;
     return load.used + amount <= load.limit;
   }
 
@@ -908,6 +919,7 @@ function labelForOption(options, value) {
 
     const currentDs = baseRecord.doppelstunde || 'kann';
     const currentNm = baseRecord.nachmittag || 'kann';
+    const currentParticipation = baseRecord.participation || 'curriculum';
     const currentRoomId = subject?.required_room_id ? String(subject.required_room_id) : '';
 
     const roomOptions = [
@@ -939,6 +951,13 @@ function labelForOption(options, value) {
           value: currentNm,
         },
         {
+          name: 'participation',
+          label: 'Teilnahme',
+          type: 'select',
+          options: PARTICIPATION_OPTIONS,
+          value: currentParticipation,
+        },
+        {
           name: 'required_room_id',
           label: 'Pflichtraum',
           type: 'select',
@@ -951,6 +970,7 @@ function labelForOption(options, value) {
 
     const newDs = values.doppelstunde || currentDs;
     const newNm = values.nachmittag || currentNm;
+    const newParticipation = values.participation || currentParticipation;
     const newRoomId = values.required_room_id ? Number(values.required_room_id) : null;
 
     setStatus('Speichere Einstellungen…');
@@ -964,6 +984,7 @@ function labelForOption(options, value) {
           wochenstunden: rec.wochenstunden,
           doppelstunde: newDs,
           nachmittag: newNm,
+          participation: newParticipation,
         };
         const updated = await updateRequirement(rec.id, payload);
         Object.assign(rec, updated);
@@ -992,7 +1013,6 @@ function labelForOption(options, value) {
   async function assignHour(teacherId, classId, subjectId, amount = 1) {
     setStatus('Speichere Zuweisung…');
     try {
-      const key = `${classId}|${subjectId}`;
       const existing = findRequirement(teacherId, classId, subjectId);
       if (existing) {
           const payload = {
@@ -1003,19 +1023,23 @@ function labelForOption(options, value) {
             wochenstunden: (existing.wochenstunden || 0) + amount,
             doppelstunde: existing.doppelstunde ?? null,
             nachmittag: existing.nachmittag ?? null,
+            participation: existing.participation ?? 'curriculum',
           };
-          const updated = await updateRequirement(existing.id, payload);
+        const updated = await updateRequirement(existing.id, payload);
           Object.assign(existing, updated);
         } else {
         const subject = maps.subjects.get(subjectId);
+        const curriculumEntry = state.curriculum.find(entry => entry.class_id === classId && entry.subject_id === subjectId);
+        const participationDefault = curriculumEntry?.participation || (subject?.is_ag_foerder ? 'ag' : 'curriculum');
         const created = await createRequirement({
           class_id: classId,
           subject_id: subjectId,
           teacher_id: teacherId,
           version_id: state.selectedVersionId,
           wochenstunden: amount,
-          doppelstunde: subject?.default_doppelstunde ?? subject?.default_doppelstunde ?? null,
-          nachmittag: subject?.default_nachmittag ?? subject?.default_nachmittag ?? null,
+          doppelstunde: subject?.default_doppelstunde ?? null,
+          nachmittag: subject?.default_nachmittag ?? null,
+          participation: participationDefault,
         });
         state.requirements.push(created);
       }
@@ -1061,6 +1085,7 @@ function labelForOption(options, value) {
           wochenstunden: rec.wochenstunden,
           doppelstunde: rec.doppelstunde ?? null,
           nachmittag: rec.nachmittag ?? null,
+          participation: rec.participation ?? 'curriculum',
         });
         state.requirements.push(created);
         createdRecords.push(created);
@@ -1177,6 +1202,7 @@ function labelForOption(options, value) {
         subjectId: entry.subject_id,
         total: entry.wochenstunden || 0,
         remaining: entry.wochenstunden || 0,
+        participation: entry.participation || 'curriculum',
       });
     });
 
@@ -1191,6 +1217,7 @@ function labelForOption(options, value) {
             subjectId: req.subject_id,
             total: 0,
             remaining: -(req.wochenstunden || 0),
+            participation: req.participation || 'curriculum',
           });
         } else {
           info.remaining = Math.max(0, (info.remaining || 0) - (req.wochenstunden || 0));
@@ -1213,11 +1240,19 @@ function labelForOption(options, value) {
             classId: req.class_id,
             subjectId: req.subject_id,
             total: 0,
+            mandatory: 0,
+            optional: 0,
             records: [],
           };
           teacherMap.set(key, entry);
         }
-        entry.total += req.wochenstunden || 0;
+        const hours = req.wochenstunden || 0;
+        entry.total += hours;
+        if ((req.participation || 'curriculum') === 'ag') {
+          entry.optional += hours;
+        } else {
+          entry.mandatory += hours;
+        }
         entry.records.push(req);
         result.set(req.teacher_id, teacherMap);
       });
@@ -1230,7 +1265,7 @@ function labelForOption(options, value) {
       const limit = getTeacherLimit(teacher);
       const teacherAssignments = assignments.get(teacher.id);
       const used = teacherAssignments
-        ? Array.from(teacherAssignments.values()).reduce((sum, entry) => sum + (entry.total || 0), 0)
+        ? Array.from(teacherAssignments.values()).reduce((sum, entry) => sum + (entry.mandatory || 0), 0)
         : 0;
       loads.set(teacher.id, { used, limit });
     });
@@ -1337,8 +1372,16 @@ function countRemainingHours(map) {
       }
     }
 
-    if (subject?.is_ag_foerder) {
-      parts.push('AG/Förder');
+    const participation = rec.participation || 'curriculum';
+    if (participation === 'ag') {
+      const label = labelForOption(PARTICIPATION_OPTIONS, participation);
+      if (label) {
+        if (entry.optional && entry.optional > 0) {
+          parts.push(`${label} (${entry.optional}h)`);
+        } else {
+          parts.push(label);
+        }
+      }
     }
 
     return parts.join(' · ');

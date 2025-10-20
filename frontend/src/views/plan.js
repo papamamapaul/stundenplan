@@ -53,7 +53,7 @@ const RULE_GROUPS = [
     id: 'unterricht',
     label: 'Unterrichtsblöcke',
     description: 'Definiert Regeln für Doppelstunden und Bandunterrichte.',
-    keys: ['doppelstundenregel', 'einzelstunde_nur_rand', 'bandstunden_parallel'],
+    keys: ['doppelstundenregel', 'einzelstunde_nur_rand', 'bandstunden_parallel', 'band_lehrer_parallel'],
   },
   {
     id: 'verteilung',
@@ -233,6 +233,8 @@ export function createPlanView() {
     ruleValuesWeights: new Map(),
     ruleDefinitionByKey: new Map(),
     ruleExtraContainers: new Map(),
+    ruleBackendDefaultsBools: new Map(),
+    ruleBackendDefaultsWeights: new Map(),
     planName: defaultPlanName(),
     planComment: '',
     generatedPlans: [],
@@ -252,7 +254,11 @@ export function createPlanView() {
     debugStale: true,
     visibleClasses: new Set(),
     initialPlanId,
+    ruleGroupSections: new Map(),
+    ruleGroupCollapsed: new Map(),
   };
+
+  const progressModal = createProgressModal();
 
   const rulesProfileBadge = document.createElement('span');
   rulesProfileBadge.className = 'badge badge-outline';
@@ -485,14 +491,20 @@ export function createPlanView() {
     state.ruleBaseWeights = new Map();
     state.ruleValuesBools = new Map();
     state.ruleValuesWeights = new Map();
+    state.ruleBackendDefaultsBools = new Map();
+    state.ruleBackendDefaultsWeights = new Map();
     if (!state.rulesDefinition) return;
     state.rulesDefinition.bools.forEach(rule => {
-      state.ruleBaseBools.set(rule.key, !!rule.default);
-      state.ruleValuesBools.set(rule.key, !!rule.default);
+      const defaultValue = !!rule.default;
+      state.ruleBaseBools.set(rule.key, defaultValue);
+      state.ruleValuesBools.set(rule.key, defaultValue);
+      state.ruleBackendDefaultsBools.set(rule.key, defaultValue);
     });
     state.rulesDefinition.weights.forEach(rule => {
-      state.ruleBaseWeights.set(rule.key, Number(rule.default));
-      state.ruleValuesWeights.set(rule.key, Number(rule.default));
+      const defaultValue = Number(rule.default ?? 0);
+      state.ruleBaseWeights.set(rule.key, defaultValue);
+      state.ruleValuesWeights.set(rule.key, defaultValue);
+      state.ruleBackendDefaultsWeights.set(rule.key, defaultValue);
     });
   }
 
@@ -575,6 +587,7 @@ export function createPlanView() {
             const value = !!profile[rule.key];
             state.ruleBaseBools.set(rule.key, value);
             state.ruleValuesBools.set(rule.key, value);
+            state.ruleBackendDefaultsBools.set(rule.key, value);
           }
         });
         const hasBandToggle = state.rulesDefinition.bools.some(rule => rule.key === 'bandstunden_parallel');
@@ -582,12 +595,14 @@ export function createPlanView() {
           const value = !!profile.leseband_parallel;
           state.ruleBaseBools.set('bandstunden_parallel', value);
           state.ruleValuesBools.set('bandstunden_parallel', value);
+          state.ruleBackendDefaultsBools.set('bandstunden_parallel', value);
         }
         state.rulesDefinition.weights.forEach(rule => {
           if (profile[rule.key] !== undefined) {
             const value = Number(profile[rule.key]);
             state.ruleBaseWeights.set(rule.key, value);
             state.ruleValuesWeights.set(rule.key, value);
+            state.ruleBackendDefaultsWeights.set(rule.key, value);
           }
         });
       }
@@ -599,6 +614,7 @@ export function createPlanView() {
     state.boolInputs.clear();
     state.weightInputs.clear();
     state.ruleExtraContainers.clear();
+    state.ruleGroupSections = new Map();
     if (!state.rulesDefinition) {
       rulesContainer.innerHTML = '<p class="text-sm opacity-70">Keine Regeln geladen.</p>';
       return;
@@ -612,35 +628,61 @@ export function createPlanView() {
       const availableKeys = group.keys.filter(key => state.ruleDefinitionByKey.has(key));
       if (!availableKeys.length) return;
 
-      const card = document.createElement('article');
-      card.className = 'border border-base-200 rounded-xl bg-base-100 shadow-sm';
-      const body = document.createElement('div');
-      body.className = 'p-4 space-y-4';
-
-      const header = document.createElement('div');
-      header.className = 'space-y-1';
-      const heading = document.createElement('h3');
-      heading.className = 'text-sm font-semibold uppercase tracking-wide';
-      heading.textContent = group.label;
-      header.appendChild(heading);
-      if (group.description) {
-        const desc = document.createElement('p');
-        desc.className = 'text-xs opacity-70';
-        desc.textContent = group.description;
-        header.appendChild(desc);
-      }
-      body.appendChild(header);
-
       const list = document.createElement('div');
       list.className = 'space-y-3';
       availableKeys.forEach(key => {
         const entry = createRuleEntry(key);
         if (entry) list.appendChild(entry);
       });
-
       if (!list.childElementCount) return;
-      body.appendChild(list);
-      card.appendChild(body);
+
+      const card = document.createElement('article');
+      card.className = 'border border-base-200 rounded-xl bg-base-100 shadow-sm overflow-hidden';
+
+      const headerButton = document.createElement('button');
+      headerButton.type = 'button';
+      headerButton.className = 'flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-base-200/60 focus:outline-none';
+
+      const headerContent = document.createElement('div');
+      headerContent.className = 'space-y-1';
+      const heading = document.createElement('h3');
+      heading.className = 'text-sm font-semibold uppercase tracking-wide';
+      heading.textContent = group.label;
+      headerContent.appendChild(heading);
+      if (group.description) {
+        const desc = document.createElement('p');
+        desc.className = 'text-xs opacity-70';
+        desc.textContent = group.description;
+        headerContent.appendChild(desc);
+      }
+
+      const chevron = document.createElement('span');
+      chevron.className = 'text-lg transition-transform duration-200';
+      chevron.textContent = '▾';
+
+      headerButton.append(headerContent, chevron);
+      card.appendChild(headerButton);
+
+      const content = document.createElement('div');
+      content.className = 'px-4 pb-4 space-y-4 border-t border-base-200';
+      content.appendChild(list);
+      card.appendChild(content);
+
+      const entryRecord = {
+        button: headerButton,
+        content,
+        chevron,
+        collapsed: false,
+      };
+      state.ruleGroupSections.set(group.id, entryRecord);
+
+      headerButton.addEventListener('click', () => {
+        toggleRuleGroupCollapse(group.id);
+      });
+
+      const initialCollapsed = state.ruleGroupCollapsed.get(group.id) ?? false;
+      setRuleGroupCollapsed(group.id, initialCollapsed, { suppressStore: true });
+
       grid.appendChild(card);
     });
 
@@ -655,6 +697,31 @@ export function createPlanView() {
 
     syncRuleControls();
     loadAnalysis().then(renderAnalysis).catch(() => {});
+  }
+
+  function setRuleGroupCollapsed(groupId, collapsed, options = {}) {
+    const entry = state.ruleGroupSections.get(groupId);
+    if (!entry) return;
+    const { suppressStore = false } = options;
+    entry.collapsed = collapsed;
+    entry.content.classList.toggle('hidden', collapsed);
+    entry.button.setAttribute('aria-expanded', String(!collapsed));
+    entry.chevron.style.transform = collapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+    if (!suppressStore || !state.ruleGroupCollapsed.has(groupId)) {
+      state.ruleGroupCollapsed.set(groupId, collapsed);
+    }
+  }
+
+  function toggleRuleGroupCollapse(groupId) {
+    const entry = state.ruleGroupSections.get(groupId);
+    if (!entry) return;
+    setRuleGroupCollapsed(groupId, !entry.collapsed);
+  }
+
+  function collapseAllRuleGroups() {
+    state.ruleGroupSections.forEach((_, groupId) => {
+      setRuleGroupCollapsed(groupId, true);
+    });
   }
 
   function createRuleEntry(ruleKey) {
@@ -869,7 +936,7 @@ export function createPlanView() {
     state.generating = true;
     generateButton.disabled = true;
     saveButton.disabled = true;
-    statusBar.set('Berechne Plan…');
+    progressModal.showLoading();
     try {
       state.planName = defaultPlanName();
       state.planComment = '';
@@ -911,13 +978,22 @@ export function createPlanView() {
       if (state.activeTab === 'analysis') {
         renderAnalysis();
       }
-      statusBar.set('Plan berechnet.');
-      setTimeout(statusBar.clear, 1500);
+      collapseAllRuleGroups();
+      statusBar.clear();
+      progressModal.showSuccess({
+        title: 'Fertig!',
+        message: 'Der Solver hat einen neuen Stundenplan erzeugt. Viel Spaß beim Prüfen der Ergebnisse.',
+      });
     } catch (err) {
+      progressModal.close();
+      saveButton.disabled = !state.lastPlanId;
       statusBar.set(`Planberechnung fehlgeschlagen: ${formatError(err)}`, true);
     } finally {
       state.generating = false;
       generateButton.disabled = false;
+      if (!progressModal.isOpen()) {
+        saveButton.disabled = !state.lastPlanId;
+      }
     }
   }
 
@@ -1127,14 +1203,14 @@ export function createPlanView() {
   function buildOverrides() {
     const overrides = {};
     state.ruleValuesBools.forEach((value, key) => {
-      const base = state.ruleBaseBools.get(key);
-      if (base === undefined || base !== value) {
+      const baseline = state.ruleBackendDefaultsBools.get(key);
+      if (baseline === undefined || baseline !== value) {
         overrides[key] = value;
       }
     });
     state.ruleValuesWeights.forEach((value, key) => {
-      const base = state.ruleBaseWeights.get(key);
-      if (base === undefined || base !== value) {
+      const baseline = state.ruleBackendDefaultsWeights.get(key);
+      if (baseline === undefined || baseline !== value) {
         overrides[key] = value;
       }
     });
@@ -1233,6 +1309,31 @@ export function createPlanView() {
       card.appendChild(body);
       resultsSection.appendChild(card);
     });
+  }
+
+  function renderActiveRuleBadges(planEntry) {
+    if (!planEntry.ruleKeysActive || !planEntry.ruleKeysActive.length) {
+      return null;
+    }
+    const block = document.createElement('div');
+    block.className = 'space-y-2';
+    const heading = document.createElement('p');
+    heading.className = 'text-xs font-semibold uppercase tracking-wide opacity-70';
+    heading.textContent = 'Aktive Regeln';
+    const list = document.createElement('div');
+    list.className = 'flex flex-wrap items-center gap-1.5';
+    planEntry.ruleKeysActive.forEach(key => {
+      const ruleDef = state.ruleDefinitionByKey.get(key);
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-sm badge-outline';
+      badge.textContent = ruleDef?.label || key;
+      if (ruleDef?.info) {
+        badge.title = ruleDef.info;
+      }
+      list.appendChild(badge);
+    });
+    block.append(heading, list);
+    return list.childElementCount ? block : null;
   }
 
   async function loadAnalysis() {
@@ -1498,32 +1599,6 @@ export function createPlanView() {
 
     return wrap;
   }
-
-  function renderActiveRuleBadges(planEntry) {
-    if (!planEntry.ruleKeysActive || !planEntry.ruleKeysActive.length) {
-      return null;
-    }
-    const block = document.createElement('div');
-    block.className = 'space-y-2';
-    const heading = document.createElement('p');
-    heading.className = 'text-xs font-semibold uppercase tracking-wide opacity-70';
-    heading.textContent = 'Aktive Regeln';
-    const list = document.createElement('div');
-    list.className = 'flex flex-wrap items-center gap-1.5';
-    planEntry.ruleKeysActive.forEach(key => {
-      const ruleDef = state.ruleDefinitionByKey.get(key);
-      const badge = document.createElement('span');
-      badge.className = 'badge badge-sm badge-outline';
-      badge.textContent = ruleDef?.label || key;
-      if (ruleDef?.info) {
-        badge.title = ruleDef.info;
-      }
-      list.appendChild(badge);
-    });
-    block.append(heading, list);
-    return list.childElementCount ? block : null;
-  }
-
   function getClassName(classId) {
     return state.classes.get(classId)?.name || `Klasse #${classId}`;
   }
@@ -1555,5 +1630,111 @@ function createStatusBar() {
       element.textContent = '';
       element.className = 'text-sm opacity-70 min-h-[1.5rem]';
     },
+  };
+}
+
+function createProgressModal() {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'modal';
+
+  const box = document.createElement('div');
+  box.className = 'modal-box space-y-4 text-center';
+
+  const visualWrap = document.createElement('div');
+  visualWrap.className = 'flex justify-center';
+  const spinner = document.createElement('span');
+  spinner.className = 'loading loading-spinner loading-lg text-primary';
+  const successIcon = document.createElement('span');
+  successIcon.className = 'hidden text-4xl';
+  successIcon.textContent = '🎉';
+  visualWrap.append(spinner, successIcon);
+
+  const title = document.createElement('h3');
+  title.className = 'font-semibold text-lg';
+  title.textContent = 'Plan wird erstellt…';
+
+  const message = document.createElement('p');
+  message.className = 'text-sm opacity-70';
+  message.textContent = 'Bitte warte einen Moment, der Solver sucht nach einer passenden Lösung.';
+
+  const actionWrap = document.createElement('div');
+  actionWrap.className = 'modal-action justify-center hidden';
+  const okButton = document.createElement('button');
+  okButton.type = 'button';
+  okButton.className = 'btn btn-primary';
+  okButton.textContent = 'OK';
+  actionWrap.appendChild(okButton);
+
+  box.append(visualWrap, title, message, actionWrap);
+
+  const backdrop = document.createElement('form');
+  backdrop.method = 'dialog';
+  backdrop.className = 'modal-backdrop';
+  const closeButton = document.createElement('button');
+  closeButton.textContent = 'Schließen';
+  backdrop.appendChild(closeButton);
+
+  dialog.append(box, backdrop);
+  document.body.appendChild(dialog);
+
+  let mode = 'idle';
+  let confirmHandler = null;
+
+  function showLoading() {
+    mode = 'loading';
+    confirmHandler = null;
+    spinner.classList.remove('hidden');
+    successIcon.classList.add('hidden');
+    actionWrap.classList.add('hidden');
+    title.textContent = 'Plan wird erstellt…';
+    message.textContent = 'Bitte warte einen Moment, der Solver sucht nach einer passenden Lösung.';
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function showSuccess({ title: titleText = 'Fertig!', message: messageText = 'Der Solver hat erfolgreich einen Plan erzeugt.', onConfirm } = {}) {
+    mode = 'success';
+    spinner.classList.add('hidden');
+    successIcon.classList.remove('hidden');
+    actionWrap.classList.remove('hidden');
+    title.textContent = titleText;
+    message.textContent = messageText;
+    confirmHandler = typeof onConfirm === 'function' ? onConfirm : null;
+    if (!dialog.open) dialog.showModal();
+  }
+
+  function close() {
+    mode = 'idle';
+    confirmHandler = null;
+    if (dialog.open) dialog.close();
+  }
+
+  function isOpen() {
+    return dialog.open;
+  }
+
+  okButton.addEventListener('click', () => {
+    if (confirmHandler) confirmHandler();
+    close();
+  });
+
+  backdrop.addEventListener('submit', event => {
+    event.preventDefault();
+    if (mode === 'loading') return;
+    if (confirmHandler) confirmHandler();
+    close();
+  });
+
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    if (mode === 'loading') return;
+    if (confirmHandler) confirmHandler();
+    close();
+  });
+
+  return {
+    showLoading,
+    showSuccess,
+    close,
+    isOpen,
   };
 }

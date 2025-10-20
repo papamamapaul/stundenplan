@@ -20,6 +20,9 @@ export function registerView(route, factory) {
 }
 
 export function getView(route) {
+  if (route.startsWith('#/plan/')) {
+    return createPlanView();
+  }
   const factory = registry.get(route) || registry.get('#/plan');
   return factory();
 }

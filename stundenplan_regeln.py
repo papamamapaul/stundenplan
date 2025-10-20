@@ -65,8 +65,25 @@ def add_constraints(
 
     obj_terms = []
 
+    fid_participation: dict[int, str] = {}
+    fid_canonical_subject: dict[int, tuple[int | None, str]] = {}
+    class_fids: dict[str, list[int]] = {}
+    for fid in FACH_ID:
+        participation = str(df.loc[fid].get('Participation') or 'curriculum').lower()
+        fid_participation[fid] = participation
+        canonical_id = df.loc[fid].get('CanonicalSubjectId')
+        canonical_name = df.loc[fid].get('CanonicalSubject') or df.loc[fid]['Fach']
+        try:
+            canonical_id = int(canonical_id)
+        except (TypeError, ValueError):
+            canonical_id = None
+        fid_canonical_subject[fid] = (canonical_id, str(canonical_name))
+        klasse_key = str(df.loc[fid, 'Klasse'])
+        class_fids.setdefault(klasse_key, []).append(fid)
+
     enforce_hours = bool(regeln.get("stundenbedarf_vollstaendig", True))
     enforce_teacher_conflicts = bool(regeln.get("keine_lehrerkonflikte", True))
+    allow_band_teacher_parallel = bool(regeln.get("band_lehrer_parallel", True))
     enforce_class_conflicts = bool(regeln.get("keine_klassenkonflikte", True))
     enforce_room_windows = bool(regeln.get("raum_verfuegbarkeit", True))
     enforce_fixed_slots = bool(regeln.get("basisplan_fixed", True))
@@ -87,11 +104,12 @@ def add_constraints(
     # -------- 1) Jede Fachstunde MUSS platziert werden --------
     for fid in FACH_ID:
         anzahl = int(df.loc[fid, 'Wochenstunden'])
+        participation = fid_participation.get(fid, 'curriculum')
         total = sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8))
-        if enforce_hours:
-            model.Add(total == anzahl)
-        else:
+        if participation == 'ag' or not enforce_hours:
             model.Add(total <= anzahl)
+        else:
+            model.Add(total == anzahl)
 
     # -------- 2) Keine Überlagerung (Lehrer/Klasse nie doppelt in einer Stunde) --------
     if enforce_teacher_conflicts or enforce_class_conflicts:
@@ -100,8 +118,53 @@ def add_constraints(
                 if enforce_teacher_conflicts:
                     for lehrer in LEHRER:
                         belegte = [plan[(fid, tag, std)] for fid in FACH_ID if df.loc[fid, 'Lehrer'] == lehrer]
-                        if belegte:
+                        if not belegte:
+                            continue
+                        if not allow_band_teacher_parallel:
                             model.Add(sum(belegte) <= 1)
+                            continue
+
+                        band_groups: dict[int, list] = {}
+                        non_band_vars = []
+                        for fid in FACH_ID:
+                            if df.loc[fid, 'Lehrer'] != lehrer:
+                                continue
+                            var = plan[(fid, tag, std)]
+                            is_band = bool(df.loc[fid].get('Bandfach'))
+                            if is_band:
+                                canonical_id, _ = fid_canonical_subject.get(fid, (None, str(df.loc[fid, 'Fach'])))
+                                if canonical_id is None:
+                                    non_band_vars.append(var)
+                                else:
+                                    band_groups.setdefault(canonical_id, []).append(var)
+                            else:
+                                non_band_vars.append(var)
+
+                        indicators = []
+
+                        if non_band_vars:
+                            model.Add(sum(non_band_vars) <= 1)
+                            nb = model.NewBoolVar(f"teacher_{lehrer}_{tag}_{std}_nonband")
+                            if len(non_band_vars) == 1:
+                                model.Add(non_band_vars[0] == nb)
+                            else:
+                                model.Add(sum(non_band_vars) >= nb)
+                                model.Add(sum(non_band_vars) <= len(non_band_vars) * nb)
+                            indicators.append(nb)
+
+                        for canonical_id, vars_list in band_groups.items():
+                            if not vars_list:
+                                continue
+                            indicator = model.NewBoolVar(f"teacher_{lehrer}_{tag}_{std}_band_{canonical_id}")
+                            model.Add(sum(vars_list) >= indicator)
+                            model.Add(sum(vars_list) <= len(vars_list) * indicator)
+                            indicators.append(indicator)
+                            if non_band_vars:
+                                upper = len(non_band_vars)
+                                model.Add(sum(non_band_vars) + upper * indicator <= upper)
+
+                        if indicators:
+                            model.Add(sum(indicators) <= 1)
                 if enforce_class_conflicts:
                     for klasse in KLASSEN:
                         belegte = [plan[(fid, tag, std)] for fid in FACH_ID if str(df.loc[fid, 'Klasse']) == str(klasse)]
@@ -329,6 +392,8 @@ def add_constraints(
         for fid in FACH_ID:
             anzahl_stunden = int(df.loc[fid, "Wochenstunden"])
             ds_rule = _str_val(df.loc[fid], "Doppelstunde", default="kann")
+            participation = fid_participation.get(fid, 'curriculum')
+            canonical_id, canonical_name = fid_canonical_subject.get(fid, (None, str(df.loc[fid, 'Fach'])))
 
             pair_vars = []    # 2er-Blöcke
             single_vars = []  # Einzelstunden
@@ -358,7 +423,10 @@ def add_constraints(
                     single_vars.append(single)
 
             # Zählgleichung
-            model.Add(2 * sum(pair_vars) + sum(single_vars) == anzahl_stunden)
+            if participation == 'ag':
+                model.Add(2 * sum(pair_vars) + sum(single_vars) <= anzahl_stunden)
+            else:
+                model.Add(2 * sum(pair_vars) + sum(single_vars) == anzahl_stunden)
 
             if ds_rule == "muss":
                 n_einzel = anzahl_stunden % 2
@@ -379,6 +447,22 @@ def add_constraints(
             elif ds_rule == "kann":
                 # Einzelstunden unattraktiv machen (Soft)
                 obj_terms.append(W_EINZEL_KANN * sum(single_vars))
+
+        # Begrenze Alias-Fächer (z.B. Deutsch + Leseband) auf max. 2 Slots pro Tag
+        canonical_map: dict[tuple[str, int | None], list[int]] = {}
+        for fid in FACH_ID:
+            canonical_id, canonical_name = fid_canonical_subject.get(fid, (None, str(df.loc[fid, 'Fach'])))
+            if canonical_id is None:
+                continue
+            key = (str(df.loc[fid, 'Klasse']), canonical_id)
+            canonical_map.setdefault(key, []).append(fid)
+
+        for (klasse, _canon), fid_list in canonical_map.items():
+            if len(fid_list) <= 1:
+                continue
+            for tag in TAGE:
+                total = sum(plan[(fid, tag, std)] for fid in fid_list for std in range(8))
+                model.Add(total <= 2)
 
     # -------- 7) Nachmittag je Fach ('muss/kann/nein') --------
     if 'Nachmittag' in df.columns and enforce_subject_afternoon:
@@ -454,17 +538,26 @@ def add_constraints(
 
     # -------- 11) Bandfächer parallel (gleiche Slots je Fach) --------
     if enforce_band_parallel and "Bandfach" in df.columns:
-        band_subjects: dict[str, list[int]] = {}
+        band_subjects: dict[str, dict[str, object]] = {}
         mismatched_hours: list[str] = []
         for fid in FACH_ID:
             if bool(df.loc[fid].get("Bandfach")):
                 name = str(df.loc[fid, "Fach"]).strip()
-                band_subjects.setdefault(name, []).append(fid)
+                entry = band_subjects.setdefault(name, {"mandatory": [], "optional": [], "optional_classes": set()})
+                if fid_participation.get(fid, 'curriculum') == 'ag':
+                    entry["optional"].append(fid)
+                    entry["optional_classes"].add(str(df.loc[fid, 'Klasse']))
+                else:
+                    entry["mandatory"].append(fid)
 
-        for subject_name, band_fids in band_subjects.items():
-            if not band_fids:
+        for subject_name, info in band_subjects.items():
+            mandatory_fids = info.get("mandatory", [])
+            optional_fids = info.get("optional", [])
+            optional_classes = info.get("optional_classes", set())
+            if not mandatory_fids and not optional_fids:
                 continue
-            hours = [int(df.loc[fid, "Wochenstunden"]) for fid in band_fids]
+            base_fids = mandatory_fids if mandatory_fids else optional_fids
+            hours = [int(df.loc[fid, "Wochenstunden"]) for fid in base_fids]
             if any(h != hours[0] for h in hours):
                 mismatched_hours.append(subject_name)
                 continue
@@ -477,11 +570,14 @@ def add_constraints(
                 df,
                 TAGE,
                 subject_name,
-                band_fids,
+                mandatory_fids,
+                optional_fids,
+                optional_classes,
+                class_fids,
                 tage=tage_required,
             )
-        # Optional: Modelle mit unterschiedlichen Wochenstunden ignorieren einfach;
-        # Debug lässt sich über Solver-Logs nachvollziehen.
+            # Optional: Modelle mit unterschiedlichen Wochenstunden ignorieren einfach;
+            # Debug lässt sich über Solver-Logs nachvollziehen.
 
     # -------- 12) Gleichmäßige Verteilung (Soft) --------
     if regeln.get("gleichverteilung", False) and W_EVEN_DIST > 0:
@@ -510,19 +606,30 @@ def add_constraints(
         model.Minimize(sum(obj_terms))
 
 
-def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
+def add_band_constraint(model, plan, df, TAGE, band_fach, mandatory_fids, optional_fids, optional_classes, class_fids, tage=2):
     """
     Bandfach exakt 'tage' mal pro Woche,
     immer parallel in allen Klassen (gleicher Tag+Stunde).
+    optionale Teilnehmer (AG) blockieren andere Fächer, sind aber nicht verpflichtend.
     """
+    mandatory_fids = list(mandatory_fids or [])
+    optional_fids = list(optional_fids or [])
+    if not mandatory_fids and not optional_fids:
+        return
     parallel_slots = []
     slots_by_day: dict[str, list[cp_model.IntVar]] = {tag: [] for tag in TAGE}
     for tag in TAGE:
         for std in range(8):
-            slot_vars = [plan[(fid, tag, std)] for fid in band_fids]
+            slot_vars = [plan[(fid, tag, std)] for fid in mandatory_fids]
             parallel = model.NewBoolVar(f"{band_fach}_parallel_{tag}_{std}")
             for v in slot_vars:
                 model.Add(v == parallel)
+            for fid in optional_fids:
+                model.Add(plan[(fid, tag, std)] <= parallel)
+            for klasse in optional_classes:
+                other_fids = [other for other in class_fids.get(str(klasse), []) if other not in mandatory_fids and other not in optional_fids]
+                for other in other_fids:
+                    model.Add(plan[(other, tag, std)] == 0).OnlyEnforceIf(parallel)
             parallel_slots.append(parallel)
             slots_by_day[tag].append(parallel)
 
@@ -531,5 +638,7 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, band_fids, tage=2):
         if literals:
             model.Add(sum(literals) <= 1)
 
-    for fid in band_fids:
+    for fid in mandatory_fids:
         model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) == tage)
+    for fid in optional_fids:
+        model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) <= tage)

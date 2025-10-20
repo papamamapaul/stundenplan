@@ -49,9 +49,27 @@ def _ensure_plan_metadata_columns(session: Session) -> None:
         session.commit()
 
 
+def _ensure_subject_columns(session: Session) -> None:
+    info = session.exec(text("PRAGMA table_info(subject)")).all()
+    columns = {row[1] for row in info}
+    if "alias_subject_id" not in columns:
+        session.exec(text("ALTER TABLE subject ADD COLUMN alias_subject_id INTEGER"))
+        session.commit()
+
+
+def _ensure_requirement_columns(session: Session) -> None:
+    info = session.exec(text("PRAGMA table_info(requirement)")).all()
+    columns = {row[1] for row in info}
+    if "participation" not in columns:
+        session.exec(text("ALTER TABLE requirement ADD COLUMN participation TEXT DEFAULT 'curriculum'"))
+        session.commit()
+
+
 @router.get("", response_model=List[PlanSummary])
 def list_plans(limit: Optional[int] = None, session: Session = Depends(get_session)) -> List[PlanSummary]:
     _ensure_plan_metadata_columns(session)
+    _ensure_subject_columns(session)
+    _ensure_requirement_columns(session)
     stmt = select(Plan).order_by(Plan.created_at.desc())
     if limit:
         stmt = stmt.limit(int(limit))
@@ -183,6 +201,12 @@ def list_rules() -> dict:
                 "info": "Lege Bandfächer (is_bandfach) parallel in allen beteiligten Klassen und verteilt sie auf unterschiedliche Tage.",
             },
             {
+                "key": "band_lehrer_parallel",
+                "label": "Bandfächer dürfen denselben Lehrer haben",
+                "default": True,
+                "info": "Erlaubt einer Lehrkraft, mehrere Klassen desselben Bandfachs gleichzeitig zu unterrichten.",
+            },
+            {
                 "key": "gleichverteilung",
                 "label": "Gleichverteilung über Woche (Soft)",
                 "default": True,
@@ -311,6 +335,8 @@ def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(
 @router.post("/generate", response_model=GenerateResponse)
 def generate_plan(req: GenerateRequest, session: Session = Depends(get_session)) -> GenerateResponse:
     _ensure_plan_metadata_columns(session)
+    _ensure_subject_columns(session)
+    _ensure_requirement_columns(session)
     version_id = req.version_id
     logger.info(
         "GeneratePlan called | version=%s profile=%s dry_run=%s params=%s overrides=%s",
@@ -837,6 +863,8 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
 @router.get("/{plan_id}", response_model=PlanDetail)
 def get_plan(plan_id: int, session: Session = Depends(get_session)) -> PlanDetail:
     _ensure_plan_metadata_columns(session)
+    _ensure_subject_columns(session)
+    _ensure_requirement_columns(session)
     plan = session.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan nicht gefunden")

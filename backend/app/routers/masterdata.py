@@ -4,12 +4,21 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
+from sqlalchemy import text
 
 from ..database import get_session
 from ..models import Class, Subject, Teacher, Room, Requirement, PlanSlot, ClassSubject
 
 
 router = APIRouter(prefix="", tags=["masterdata"])
+
+
+def _ensure_subject_alias_column(session: Session) -> None:
+    info = session.exec(text("PRAGMA table_info(subject)")).all()
+    columns = {row[1] for row in info}
+    if "alias_subject_id" not in columns:
+        session.exec(text("ALTER TABLE subject ADD COLUMN alias_subject_id INTEGER"))
+        session.commit()
 
 
 @router.get("/teachers", response_model=List[Teacher])
@@ -170,11 +179,13 @@ def delete_class(class_id: int, session: Session = Depends(get_session)) -> dict
 
 @router.get("/subjects", response_model=List[Subject])
 def list_subjects(session: Session = Depends(get_session)) -> List[Subject]:
+    _ensure_subject_alias_column(session)
     return session.exec(select(Subject)).all()
 
 
 @router.post("/subjects", response_model=Subject)
 def create_subject(payload: Subject, session: Session = Depends(get_session)) -> Subject:
+    _ensure_subject_alias_column(session)
     if not payload.name:
         raise HTTPException(status_code=400, detail="name required")
     if payload.required_room_id is not None:
@@ -189,6 +200,7 @@ def create_subject(payload: Subject, session: Session = Depends(get_session)) ->
         default_nachmittag=payload.default_nachmittag,
         is_bandfach=bool(payload.is_bandfach),
         is_ag_foerder=bool(payload.is_ag_foerder),
+        alias_subject_id=payload.alias_subject_id,
     )
     session.add(s)
     session.commit()
@@ -198,6 +210,7 @@ def create_subject(payload: Subject, session: Session = Depends(get_session)) ->
 
 @router.put("/subjects/{subject_id}", response_model=Subject)
 def update_subject(subject_id: int, payload: Subject, session: Session = Depends(get_session)) -> Subject:
+    _ensure_subject_alias_column(session)
     s = session.get(Subject, subject_id)
     if not s:
         raise HTTPException(status_code=404, detail="subject not found")
@@ -221,6 +234,11 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
         s.is_bandfach = bool(payload.is_bandfach)
     if payload.is_ag_foerder is not None:
         s.is_ag_foerder = bool(payload.is_ag_foerder)
+    if "alias_subject_id" in payload_data:
+        alias_id = payload_data["alias_subject_id"]
+        if alias_id and not session.get(Subject, alias_id):
+            raise HTTPException(status_code=400, detail="alias subject not found")
+        s.alias_subject_id = alias_id
     session.add(s)
     session.commit()
     session.refresh(s)

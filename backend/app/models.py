@@ -53,6 +53,15 @@ class Subject(SQLModel, table=True):
     default_nachmittag: Optional[NachmittagEnum] = Field(default=None)
     is_bandfach: bool = Field(default=False)
     is_ag_foerder: bool = Field(default=False)
+    alias_subject_id: Optional[int] = Field(
+        default=None,
+        sa_column=sa.Column(sa.Integer, sa.ForeignKey("subject.id"), nullable=True),
+    )
+
+
+class RequirementParticipationEnum(str, Enum):
+    curriculum = "curriculum"
+    ag = "ag"
 
 
 class Requirement(SQLModel, table=True):
@@ -63,6 +72,7 @@ class Requirement(SQLModel, table=True):
     wochenstunden: int
     doppelstunde: DoppelstundeEnum = Field(default=DoppelstundeEnum.kann)
     nachmittag: NachmittagEnum = Field(default=NachmittagEnum.kann)
+    participation: RequirementParticipationEnum = Field(default=RequirementParticipationEnum.curriculum)
     # Optional version grouping
     version_id: Optional[int] = Field(default=None, foreign_key="distributionversion.id")
 
@@ -77,6 +87,7 @@ class ClassSubject(SQLModel, table=True):
     class_id: int = Field(foreign_key="class.id")
     subject_id: int = Field(foreign_key="subject.id")
     wochenstunden: int
+    participation: RequirementParticipationEnum = Field(default=RequirementParticipationEnum.curriculum)
 
 
 class RuleProfile(SQLModel, table=True):

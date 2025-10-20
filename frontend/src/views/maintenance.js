@@ -19,6 +19,11 @@ const SUBJECT_NACHMITTAG_OPTIONS = [
   { value: 'nein', label: 'Kein Nachmittag' },
 ];
 
+const CURRICULUM_PARTICIPATION_OPTIONS = [
+  { value: 'curriculum', label: 'Pflicht (Curriculum)' },
+  { value: 'ag', label: 'Freiwillig (AG/Förder)' },
+];
+
 export function createDataMaintenanceView() {
   const container = document.createElement('section');
   container.className = 'space-y-6';
@@ -518,6 +523,7 @@ function createSubjectsSection() {
     'Pflichtraum',
     'Bandfach',
     'AG/Förder',
+    'Alias-Fach',
     'Aktion',
   ]);
   wrap.appendChild(table.wrapper);
@@ -557,6 +563,7 @@ function createSubjectsSection() {
         subjectRoomCell(subject, state.rooms, setStatus, clearStatus),
         subjectBandCheckboxCell(subject, setStatus, clearStatus),
         subjectAgCheckboxCell(subject, setStatus, clearStatus),
+        subjectAliasCell(subject, state.subjects, setStatus, clearStatus),
         subjectActionCell(subject, setStatus, clearStatus, loadData),
       );
       table.tbody.appendChild(tr);
@@ -705,6 +712,51 @@ function createSubjectsSection() {
     return td;
   }
 
+  function populateAliasSelect(select, subjects, excludeId = null) {
+    select.innerHTML = '';
+    const noneOption = document.createElement('option');
+    noneOption.value = '';
+    noneOption.textContent = 'Kein Alias';
+    select.appendChild(noneOption);
+    subjects
+      .filter(item => item.id && item.id !== excludeId)
+      .forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item.id;
+        opt.textContent = item.name || `Fach #${item.id}`;
+        select.appendChild(opt);
+      });
+  }
+
+  function subjectAliasCell(subject, subjects, setStatusFn, clearStatusFn) {
+    const td = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'select select-bordered select-sm w-full';
+    populateAliasSelect(select, subjects, subject.id);
+    select.value = subject.alias_subject_id || '';
+    select.addEventListener('change', async () => {
+      const rawValue = select.value;
+      const normalized = rawValue ? Number(rawValue) : null;
+      if (normalized === subject.id) {
+        select.value = subject.alias_subject_id || '';
+        return;
+      }
+      if ((subject.alias_subject_id ?? null) === normalized) return;
+      setStatusFn('Speichere…');
+      try {
+        const updated = await updateSubject(subject.id, { alias_subject_id: normalized });
+        Object.assign(subject, updated);
+        setStatusFn('Gespeichert.');
+        setTimeout(clearStatusFn, 1500);
+      } catch (err) {
+        setStatusFn(`Fehler: ${formatError(err)}`, true);
+        select.value = subject.alias_subject_id || '';
+      }
+    });
+    td.appendChild(select);
+    return td;
+  }
+
   function subjectActionCell(subject, setStatusFn, clearStatusFn, reloadFn) {
     const td = document.createElement('td');
     td.className = 'text-right';
@@ -745,6 +797,7 @@ function createSubjectsSection() {
       required_room_id: null,
       is_bandfach: false,
       is_ag_foerder: false,
+      alias_subject_id: null,
     };
 
     const nameCell = subjectDraftInput('Name*', value => {
@@ -821,6 +874,16 @@ function createSubjectsSection() {
     agCell.appendChild(agLabel);
     tr.appendChild(agCell);
 
+    const aliasCell = document.createElement('td');
+    const aliasSelect = document.createElement('select');
+    aliasSelect.className = 'select select-bordered select-sm w-full';
+    populateAliasSelect(aliasSelect, state.subjects);
+    aliasSelect.addEventListener('change', () => {
+      draft.alias_subject_id = aliasSelect.value ? Number(aliasSelect.value) : null;
+    });
+    aliasCell.appendChild(aliasSelect);
+    tr.appendChild(aliasCell);
+
     const actionCell = document.createElement('td');
     actionCell.className = 'text-right';
     const addBtn = document.createElement('button');
@@ -840,6 +903,7 @@ function createSubjectsSection() {
           required_room_id: draft.required_room_id,
           is_bandfach: draft.is_bandfach,
           is_ag_foerder: draft.is_ag_foerder,
+          alias_subject_id: draft.alias_subject_id,
         };
         const created = await createSubject(payload);
         state.subjects.push(created);
@@ -1190,19 +1254,27 @@ function createCurriculumSection() {
   const setStatus = status.set;
   const clearStatus = status.clear;
 
-  function classTotal(classId) {
-    let total = 0;
-    const subjectsMap = state.subjectsMap || new Map();
+  function normalizeCurriculumEntry(entry = {}) {
+    return {
+      ...entry,
+      participation: entry.participation || 'curriculum',
+    };
+  }
+
+  function getClassTotals(classId) {
+    let mandatory = 0;
+    let optional = 0;
     state.entries.forEach(entry => {
-      if (entry?.class_id === classId) {
-        const subject = subjectsMap.get(entry.subject_id);
-        if (subject?.is_ag_foerder) {
-          return;
-        }
-        total += entry.wochenstunden || 0;
+      if (entry?.class_id !== classId) return;
+      const hours = entry?.wochenstunden || 0;
+      const participation = entry?.participation || 'curriculum';
+      if (participation === 'ag') {
+        optional += hours;
+      } else {
+        mandatory += hours;
       }
     });
-    return total;
+    return { mandatory, optional };
   }
 
   function updateClassTotalDisplay(classId) {
@@ -1210,7 +1282,8 @@ function createCurriculumSection() {
     const selector = `[data-class-total="${String(classId)}"]`;
     const badge = table.wrapper.querySelector(selector);
     if (!badge) return;
-    badge.textContent = `${classTotal(classId)} h`;
+    const { mandatory, optional } = getClassTotals(classId);
+    badge.textContent = optional > 0 ? `${mandatory} h (+${optional} h AG)` : `${mandatory} h`;
   }
 
   async function loadData() {
@@ -1224,7 +1297,10 @@ function createCurriculumSection() {
       state.classes = classes.sort((a, b) => a.name.localeCompare(b.name));
       state.subjects = subjects.sort((a, b) => a.name.localeCompare(b.name));
       state.subjectsMap = new Map(state.subjects.map(sub => [sub.id, sub]));
-      state.entries = new Map(curriculum.map(entry => [`${entry.class_id}|${entry.subject_id}`, entry]));
+      state.entries = new Map(curriculum.map(entry => {
+        const normalized = normalizeCurriculumEntry(entry);
+        return [`${normalized.class_id}|${normalized.subject_id}`, normalized];
+      }));
       renderTable();
       setStatus('Stundentafel geladen.');
       setTimeout(clearStatus, 2000);
@@ -1258,7 +1334,8 @@ function createCurriculumSection() {
       const totalBadge = document.createElement('span');
       totalBadge.className = 'badge badge-neutral badge-sm self-start';
       totalBadge.dataset.classTotal = String(cls.id);
-      totalBadge.textContent = `${classTotal(cls.id)} h`;
+      const totals = getClassTotals(cls.id);
+      totalBadge.textContent = totals.optional > 0 ? `${totals.mandatory} h (+${totals.optional} h AG)` : `${totals.mandatory} h`;
 
       const label = document.createElement('span');
       label.className = 'text-xs uppercase opacity-60';
@@ -1299,6 +1376,12 @@ function createCurriculumSection() {
     input.value = entry?.wochenstunden ?? '';
     input.placeholder = '0';
 
+    const select = document.createElement('select');
+    select.className = 'select select-bordered select-xs';
+    select.innerHTML = CURRICULUM_PARTICIPATION_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    select.value = entry?.participation || 'curriculum';
+    select.disabled = !entry;
+
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn btn-ghost btn-xs text-error';
@@ -1313,7 +1396,7 @@ function createCurriculumSection() {
         suppressBlur = false;
         return;
       }
-      handleCurriculumChange(key, input.value, { input, deleteBtn });
+      handleCurriculumChange(key, { hoursRaw: input.value, participation: select.value }, { input, deleteBtn, select });
     });
 
     input.addEventListener('keydown', evt => {
@@ -1321,6 +1404,12 @@ function createCurriculumSection() {
         evt.preventDefault();
         input.blur();
       }
+    });
+
+    select.addEventListener('change', async () => {
+      suppressBlur = true;
+      await handleCurriculumChange(key, { hoursRaw: input.value, participation: select.value }, { input, deleteBtn, select });
+      suppressBlur = false;
     });
 
     deleteBtn.addEventListener('mousedown', () => {
@@ -1335,17 +1424,19 @@ function createCurriculumSection() {
         confirmText: 'Löschen',
       });
       if (!confirmed) return;
-      await handleCurriculumDelete(key, { input, deleteBtn });
+      await handleCurriculumDelete(key, { input, deleteBtn, select });
     });
 
-    wrapper.append(input, deleteBtn);
+    wrapper.append(input, select, deleteBtn);
     td.appendChild(wrapper);
     return td;
   }
 
-  async function handleCurriculumChange(key, rawValue, controls) {
+  async function handleCurriculumChange(key, payload, controls) {
     const current = state.entries.get(key);
-    const trimmed = (rawValue ?? '').toString().trim();
+    const hoursRaw = payload?.hoursRaw ?? (current?.wochenstunden ?? '');
+    const participation = payload?.participation || current?.participation || 'curriculum';
+    const trimmed = (hoursRaw ?? '').toString().trim();
 
     if (trimmed === '') {
       await handleCurriculumDelete(key, controls);
@@ -1357,36 +1448,66 @@ function createCurriculumSection() {
       if (controls?.input) {
         controls.input.value = current?.wochenstunden ?? '';
       }
+      if (controls?.select && current) {
+        controls.select.value = current.participation || 'curriculum';
+      }
       return;
     }
 
+    const [classId, subjectId] = key.split('|').map(Number);
+
     if (current) {
-      if (current.wochenstunden === value) return;
+      const currentParticipation = current.participation || 'curriculum';
+      const needsHoursUpdate = current.wochenstunden !== value;
+      const needsParticipationUpdate = currentParticipation !== participation;
+      if (!needsHoursUpdate && !needsParticipationUpdate) return;
+
+      const updatePayload = {};
+      if (needsHoursUpdate) updatePayload.wochenstunden = value;
+      if (needsParticipationUpdate) updatePayload.participation = participation;
+
       setStatus('Aktualisiere Eintrag…');
       try {
-        const updated = await updateCurriculum(current.id, { wochenstunden: value });
-        state.entries.set(key, updated);
+        const updated = await updateCurriculum(current.id, updatePayload);
+        const normalized = normalizeCurriculumEntry(updated || { ...current, wochenstunden: value, participation });
+        state.entries.set(key, normalized);
         if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
+        if (controls?.select) {
+          controls.select.disabled = false;
+          controls.select.value = normalized.participation;
+        }
+        if (controls?.input) controls.input.value = normalized.wochenstunden ?? '';
         setStatus('Aktualisiert.');
-        updateClassTotalDisplay(updated?.class_id ?? current.class_id);
+        updateClassTotalDisplay(normalized.class_id ?? current.class_id ?? classId);
         setTimeout(clearStatus, 1500);
       } catch (err) {
         setStatus(`Fehler: ${formatError(err)}`, true);
         if (controls?.input) controls.input.value = current.wochenstunden ?? '';
+        if (controls?.select) controls.select.value = currentParticipation;
       }
     } else {
-      const [classId, subjectId] = key.split('|').map(Number);
       setStatus('Lege Eintrag an…');
       try {
-        const created = await createCurriculum({ class_id: classId, subject_id: subjectId, wochenstunden: value });
-        state.entries.set(key, created);
+        const created = await createCurriculum({
+          class_id: classId,
+          subject_id: subjectId,
+          wochenstunden: value,
+          participation,
+        });
+        const normalized = normalizeCurriculumEntry(created);
+        state.entries.set(key, normalized);
         if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
+        if (controls?.select) {
+          controls.select.disabled = false;
+          controls.select.value = normalized.participation;
+        }
         setStatus('Eintrag angelegt.');
         updateClassTotalDisplay(classId);
         setTimeout(clearStatus, 1500);
       } catch (err) {
         setStatus(`Fehler: ${formatError(err)}`, true);
         if (controls?.input) controls.input.value = '';
+        if (controls?.select) controls.select.value = 'curriculum';
       }
     }
   }
@@ -1396,6 +1517,10 @@ function createCurriculumSection() {
     if (!current) {
       if (controls?.input) controls.input.value = '';
       if (controls?.deleteBtn) controls.deleteBtn.disabled = true;
+      if (controls?.select) {
+        controls.select.value = 'curriculum';
+        controls.select.disabled = true;
+      }
       return;
     }
     setStatus('Lösche Eintrag…');
@@ -1404,6 +1529,10 @@ function createCurriculumSection() {
       state.entries.delete(key);
       if (controls?.input) controls.input.value = '';
       if (controls?.deleteBtn) controls.deleteBtn.disabled = true;
+      if (controls?.select) {
+        controls.select.value = 'curriculum';
+        controls.select.disabled = true;
+      }
       setStatus('Eintrag gelöscht.');
       updateClassTotalDisplay(current.class_id);
       setTimeout(clearStatus, 1500);
@@ -1411,6 +1540,7 @@ function createCurriculumSection() {
       setStatus(`Fehler: ${formatError(err)}`, true);
       if (controls?.input) controls.input.value = current.wochenstunden ?? '';
       if (controls?.deleteBtn) controls.deleteBtn.disabled = false;
+      if (controls?.select) controls.select.value = current.participation || 'curriculum';
     }
   }
 

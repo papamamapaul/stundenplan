@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import Class, ClassSubject, Subject
+from ..models import Class, ClassSubject, Subject, RequirementParticipationEnum
 
 router = APIRouter(prefix="/excel", tags=["excel"])
 
@@ -84,7 +84,12 @@ def import_curriculum_from_excel(
             session.add(subj)
             session.commit(); session.refresh(subj)
 
-        cs = ClassSubject(class_id=cls.id, subject_id=subj.id, wochenstunden=ws)
+        cs = ClassSubject(
+            class_id=cls.id,
+            subject_id=subj.id,
+            wochenstunden=ws,
+            participation=RequirementParticipationEnum.curriculum,
+        )
         session.add(cs)
         created += 1
 

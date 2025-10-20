@@ -59,6 +59,9 @@ def update_requirement(req_id: int, payload: Requirement, session: Session = Dep
         r.doppelstunde = payload.doppelstunde
     if payload.nachmittag is not None:
         r.nachmittag = payload.nachmittag
+    fields_set = getattr(payload, "__fields_set__", set())
+    if "participation" in fields_set and payload.participation is not None:
+        r.participation = payload.participation
     session.add(r)
     session.commit()
     session.refresh(r)

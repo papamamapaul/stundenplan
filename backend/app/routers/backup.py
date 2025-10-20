@@ -10,6 +10,7 @@ from ..models import (
     Class,
     ClassSubject,
     Requirement,
+    RequirementParticipationEnum,
     RuleProfile,
     Subject,
     Teacher,
@@ -94,6 +95,7 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             required_room=room_by_id[s.required_room_id].name if (s.required_room_id and room_by_id.get(s.required_room_id)) else None,
             is_bandfach=s.is_bandfach,
             is_ag_foerder=s.is_ag_foerder,
+            alias_subject=subject_by_id[s.alias_subject_id].name if (s.alias_subject_id and subject_by_id.get(s.alias_subject_id)) else None,
         )
         for s in subjects
     ]
@@ -103,6 +105,7 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             class_name=class_by_id[cs.class_id].name if class_by_id.get(cs.class_id) else str(cs.class_id),
             subject_name=subject_by_id[cs.subject_id].name if subject_by_id.get(cs.subject_id) else str(cs.subject_id),
             wochenstunden=cs.wochenstunden,
+            participation=cs.participation.value if getattr(cs, "participation", None) else None,
         )
         for cs in curriculum
     ]
@@ -115,6 +118,7 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             wochenstunden=r.wochenstunden,
             doppelstunde=r.doppelstunde.value,
             nachmittag=r.nachmittag.value,
+            participation=r.participation.value if r.participation else None,
         )
         for r in requirements
     ]
@@ -252,6 +256,11 @@ def import_data(
             s.is_bandfach = bool(bs.is_bandfach)
         if bs.is_ag_foerder is not None:
             s.is_ag_foerder = bool(bs.is_ag_foerder)
+        if bs.alias_subject:
+            alias = session.exec(select(Subject).where(Subject.name == bs.alias_subject)).first()
+            s.alias_subject_id = alias.id if alias else None
+        else:
+            s.alias_subject_id = None
         session.add(s); session.commit(); session.refresh(s)
         return s
 
@@ -281,12 +290,14 @@ def import_data(
         sub = s_map.get(item.subject_name) or session.exec(select(Subject).where(Subject.name == item.subject_name)).first()
         if not cls or not sub:
             raise HTTPException(status_code=400, detail=f"Unbekannte Klasse/Fach in curriculum: {item.class_name}/{item.subject_name}")
+        participation = RequirementParticipationEnum(item.participation) if item.participation else RequirementParticipationEnum.curriculum
         existing = session.exec(select(ClassSubject).where(ClassSubject.class_id == cls.id, ClassSubject.subject_id == sub.id)).first()
         if existing:
             existing.wochenstunden = item.wochenstunden
+            existing.participation = participation
             session.add(existing)
         else:
-            session.add(ClassSubject(class_id=cls.id, subject_id=sub.id, wochenstunden=item.wochenstunden))
+            session.add(ClassSubject(class_id=cls.id, subject_id=sub.id, wochenstunden=item.wochenstunden, participation=participation))
         session.commit()
 
     # Requirements (upsert by class+subject pair)
@@ -304,11 +315,13 @@ def import_data(
         existing = session.exec(select(Requirement).where(Requirement.class_id == cls.id, Requirement.subject_id == sub.id)).first()
         ds = item.doppelstunde or DoppelstundeEnum.kann.value
         nm = item.nachmittag or NachmittagEnum.kann.value
+        participation = RequirementParticipationEnum(item.participation) if item.participation else RequirementParticipationEnum.curriculum
         if existing:
             existing.teacher_id = t.id
             existing.wochenstunden = item.wochenstunden
             existing.doppelstunde = DoppelstundeEnum(ds)
             existing.nachmittag = NachmittagEnum(nm)
+            existing.participation = participation
             session.add(existing)
         else:
             session.add(
@@ -319,6 +332,7 @@ def import_data(
                     wochenstunden=item.wochenstunden,
                     doppelstunde=DoppelstundeEnum(ds),
                     nachmittag=NachmittagEnum(nm),
+                    participation=participation,
                 )
             )
         session.commit()
