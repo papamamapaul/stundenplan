@@ -23,6 +23,7 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 2. **Lehrkräfte**
    - Stammdaten: Name, Kürzel, Deputatsstunden.
    - Arbeitstage / Verfügbarkeiten (Raster nach Tagen und Stunden).
+   - Solver-Option, um die Arbeitstage verbindlich zu respektieren (`lehrer_arbeitstage`).
    - Pflichtanwesenheiten (z. B. Konferenzen) und Reservierungen (optional).
    - UI: Tabellenbasierte Pflege mit Inline-Editing (Blur → sofortiges Speichern), letzte Zeile als Eingabezeile für neue Einträge.
 
@@ -84,11 +85,14 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 1. **OR-Tools Integration**
    - Erstellung von Stundenplänen auf Basis der Requirements und Basisplanvorgaben.
    - Regeln (z. B. keine Hohlstunden, Raum-/Lehrer-Verfügbarkeiten, Doppelstunden-Constraints).
+   - Erweiterte Regeln: Band-Lehrer-Ausnahmen, Lehrer-Arbeitstage, Präferenz für Einzelstunden bei „Doppelstunde kann“.
 
 2. **Planversionen**
    - Ergebnisse (Plan + Metadaten) als Version speichern (Name, Kommentar).
    - Anzeige der Planvariante mit ScheduleGrid.
    - Vergleich / Favoritenmarkierung (optional).
+   - Manuelle Nachbearbeitung: Drag & Drop im Raster, Zwischenablage, geprüfte Lehrerkollisionen, Highlight je Lehrkraft, Rückkehr zum Ursprungsplan.
+   - Speichern der manuellen Änderungen via Slot-Override (`/plans/{id}/slots`).
 
 ### 3.5 Backups & Datenexport
 
@@ -107,6 +111,7 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
      - Tages-Leisten, Klassen-Unterspalten, Zeilen für Zeitblöcke.
      - Zustände: Fixed (🔒), Allowed (hell), Geplanter Unterricht (bunte Fachkachel).
      - Tooltips mit Volltext (Fach, Lehrer, Raum).
+      - Hervorhebung einzelner Lehrkräfte (Filter), auch im Bearbeitungsmodus.
    - `DragPalette` (Filter + Chips).
    - Status-/Toastr-Komponente für Feedback.
    - Tab-Navigation.
@@ -136,20 +141,58 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 
 4. **Performance**
    - Effiziente Render-Updates (z. B. virtualisierte Listen oder differenzierte DOM-Updates).
+   - Lokaler Editor (Slots im Speicher) für verzögerungsfreies Drag & Drop.
 
-## 5. Persistenz & API
+## 5. Persistenz, Backend & API
 
-1. **Bestehende Endpoints**
-   - `/teachers`, `/classes`, `/subjects`, `/rooms`, `/requirements`, `/basisplan`, `/plans`, `/versions`, `/backup`, etc.
+### 5.1 Backend-Struktur (aktueller Stand)
 
-2. **Erweiterungen**
-   - Lehrer-Verfügbarkeiten (Tage/Stunden).
-   - Fächer-Stundenmatrix pro Klassenstufe (bereits angelegt, validieren).
-   - Basisplan: `windows` Feld (Soft-Slots) – evtl. optional.
+- `backend/app/main.py` initialisiert FastAPI, registriert Router und seedet Standard-Regelprofile.
+- `backend/app/models.py` beschreibt sämtliche SQLModel-Tabellen (Teachers, Subjects, Requirements, Plans, BasisPlan usw.).
+- `backend/app/routers/` bündelt die REST-Endpunkte für Stammdaten, Basisplan- und Planverwaltung.
+- `backend/app/services/solver_service.py` kapselt die OR-Tools-Anbindung (`solve_best_plan`).
+- `stundenplan_regeln.py` definiert die konkreten Constraints und Objectives des Solvers.
 
-3. **Autorisierung**
-   - Für MVP keine Authentifizierung.
-   - API-Schema so gestalten, dass spätere User/Gruppenmodellierung möglich bleibt (z. B. Owner-Id Feld reservieren).
+### 5.2 Zentrale Datenmodelle
+
+- **Subject** enthält neben Raum- und Default-Angaben Flags wie `is_bandfach`, `is_ag_foerder` sowie optional `alias_subject_id` (z. B. Leseband → Deutsch).
+- **Requirement** nutzt `version_id` und `participation` (`curriculum`/`ag`), um Curriculum- und AG-Stunden nebeneinander abzubilden.
+- **BasisPlan** speichert `windows`, `fixed` und `flexible` als JSON.  
+  - `fixed`: feste Slot-Zuweisungen (pro Klasse/Slot → Fach erzwingen).  
+  - `flexible`: optionale Slot-Gruppen für alternative Platzierungen eines Fachs.
+- **Plan** hält Score, Status, `comment`, `version_id` sowie Snapshots (`rules_snapshot`, `rule_keys_active`, `params_used`) zur Nachvollziehbarkeit.
+
+### 5.3 Planungs- und Solver-Workflow
+
+1. **Analyse** (`GET /plans/analyze`): Aggregiert Requirements (optional per `version_id`), Klassen-/Lehrer-Stunden und markiert Problemfälle (z. B. Doppelstunden, Nachmittagsunterricht).
+2. **Regel-Liste** (`GET /plans/rules`): Liefert die schaltbaren Bool-Parameter und Gewichtungen für das Frontend.
+3. **Plan-Generierung** (`POST /plans/generate`): Lädt Requirements, Stammdaten und Basisplan, mappt `basisplan.data.fixed` und `basisplan.data.flexible` und übergibt alles an `solve_best_plan`. Erfolgreiche Runs persistieren Plan + Slots; Fehlschläge liefern `HTTP 422` mit `"Keine Lösung gefunden."`.
+4. **Plan-Update** (`PUT /plans/{id}`): Benennt Pläne um oder ergänzt Kommentare.
+5. **Plan-Slot-Update** (`PUT /plans/{id}/slots`): Überschreibt die Slotliste nach manuellen Anpassungen im Editor.
+
+### 5.4 Solver-spezifische Regeln
+
+- Fixed Slots setzen harte Constraints (`== 1`) für `(fach, tag, stunde)`.
+- Flexible Gruppen erzwingen `sum(slots) == 1` pro Fach/Gruppe.
+- Klassen-Zeitfenster aus dem Basisplan sperren Slots (`basisplan_windows`).
+- Bandfächer werden parallel über Klassen gelegt; `band_lehrer_parallel` erlaubt parallelen Unterricht einer Lehrkraft.
+- Alias-Fächer (via `alias_subject_id`) teilen sich Doppelstunden- und Tagesgrenzen.
+- Lehrer-Arbeitstage (`lehrer_arbeitstage`) sperren Einsätze außerhalb hinterlegter Verfügbarkeiten.
+- „Doppelstunde = kann“ favorisiert Einzelstunden über Soft-Objectives.
+- Weitere Regeln decken Tageslimits, Vormittags-/Nachmittagsgrenzen, Konfliktfreiheit und Soft-Ziele (`gleichverteilung`, Hohlstunden) ab.
+
+### 5.5 API-Endpunkte & Erweiterungen
+
+- **Aktuell verfügbar:** `/teachers`, `/classes`, `/subjects`, `/rooms`, `/requirements`, `/basisplan`, `/plans`, `/versions`, `/backup` u. a.
+- **Geplante/teilweise implementierte Erweiterungen:**
+  - Lehrer-Verfügbarkeiten als Raster (Tage × Stunden).
+  - Fächer-Stundenmatrix pro Klassenstufe (Validierung offen).
+  - Optionales `windows`-Feld im Basisplan für Soft-Slots.
+
+### 5.6 Autorisierung & Security
+
+- MVP ohne Authentifizierung.
+- API-Schema reserviert Felder (z. B. `owner_id`), um spätere User-/Gruppenmodelle zu ermöglichen.
 
 ## 6. Versionierung & Deployment
 
@@ -184,6 +227,25 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 - Detailliertes Datenmodell für Lehrer-Verfügbarkeiten und Stundenbedarfe.
 - Solver-Anpassungen (Berücksichtigung neuer Constraints).
 - Umsetzungsplan / Roadmap (Milestones).
+
+**Bekannte Einschränkungen & Ideen (aktueller Dev-Stand):**
+
+| Thema | Beschreibung | Idee/Next Steps |
+|-------|--------------|-----------------|
+| Fehlerfeedback Solver | Bei 422 („Keine Lösung gefunden.“) gibt es nur Status/Console-Ausgabe. | Im Plan-View eine sichtbare Info einblenden (mit Link zum Analyse-Tab oder Troubleshooting-Hinweisen). |
+| Analyse-Aktualisierung | Analyse aktualisiert sich nicht bei Regel-/Paramänderungen. | Optional automatische Aktualisierung, sobald Overrides die Stundenverteilung beeinflussen. |
+| Basisplan > Plan Sync | Keine Validierung against Curriculum bei Optionen. | Warnsystem ergänzen, bevor Solver läuft. |
+| Regelübersicht | Badge zeigt „Overrides“/„Params“, aber keine Details. | Tooltips oder Liste der abweichenden Keys integrieren. |
+| Persistenz Param/Rule Overrides | Aktuell In-Memory; kein Save über Reload hinaus. | Persistente Speicherung pro Version/Profil. |
+| Fehlendes Favicon | Browser 404 auf `favicon.ico`. | Datei nachlegen oder Link entfernen. |
+
+**Nächste Schritte / Übergabe-Hinweise:**
+
+1. Solver-Fehler analysieren: Analyse-Tab und Basisplan prüfen, Regeln/Parameter feinjustieren (`max_attempts`, `time_per_attempt`).
+2. UX verbessern: Fehlerhinweis für „Keine Lösung gefunden.“ prominent im UI platzieren und Troubleshooting-Panel verlinken.
+3. Param-/Regel-Defaults: Pro Version/Profil klare Defaults setzen (`DEFAULT_PARAMS` + Profil-Regeln).
+4. Dokumentation vertiefen: Basisplan-Datenformat (`data.fixed`/`data.flexible`) für externe Tools dokumentieren.
+5. Optional persistente Speicherung von Solver-Parametern je Planprofil / API für zuletzt genutzte Parameter schaffen.
 
 ---
 
