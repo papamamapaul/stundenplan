@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from ..database import get_session
 from ..models import Class, Subject, Teacher, Room, Requirement, PlanSlot, ClassSubject
+from ..services.subject_config import sync_requirements_for_subject
 
 
 router = APIRouter(prefix="", tags=["masterdata"])
@@ -214,6 +215,7 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
     s = session.get(Subject, subject_id)
     if not s:
         raise HTTPException(status_code=404, detail="subject not found")
+    needs_sync = False
     if payload.name:
         s.name = payload.name
     if payload.kuerzel is not None:
@@ -228,8 +230,10 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
         s.required_room_id = rid
     if payload.default_doppelstunde is not None:
         s.default_doppelstunde = payload.default_doppelstunde
+        needs_sync = True
     if payload.default_nachmittag is not None:
         s.default_nachmittag = payload.default_nachmittag
+        needs_sync = True
     if payload.is_bandfach is not None:
         s.is_bandfach = bool(payload.is_bandfach)
     if payload.is_ag_foerder is not None:
@@ -242,6 +246,8 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
     session.add(s)
     session.commit()
     session.refresh(s)
+    if needs_sync:
+        sync_requirements_for_subject(session, s.id)
     return s
 
 

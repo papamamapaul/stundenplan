@@ -29,9 +29,10 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 
 3. **Fächer**
    - Fachname, Kürzel, Farbe (wird überall konsistent genutzt).
-  - Doppelstunden-Regeln (muss/kann/darf nicht).
-  - Pflicht-Raum (z. B. Schwimmhalle).
-  - Stundenbedarf pro Klassenstufe (Matrix Klasse × Stunden).
+   - Doppelstunden-Regeln (muss/kann/darf nicht).
+   - Pflicht-Raum (z. B. Schwimmhalle).
+   - Stundenbedarf pro Klassenstufe (Matrix Klasse × Stunden).
+   - Klassenstufen-spezifische Konfiguration (Wochenstunden, Doppelstundenmodus, Nachmittagspflicht) zentral in der Fächerpflege; Änderungen werden automatisch mit Requirements synchronisiert.
 
 4. **Räume**
    - Raumname, Typ, Kapazität, Klassenraum-Flag.

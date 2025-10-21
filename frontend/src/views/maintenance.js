@@ -24,6 +24,20 @@ const CURRICULUM_PARTICIPATION_OPTIONS = [
   { value: 'ag', label: 'Freiwillig (AG/Förder)' },
 ];
 
+const CURRICULUM_DOPPEL_OPTIONS = [
+  { value: '', label: 'Vererbt (Fach-Standard)' },
+  { value: 'muss', label: 'Doppelstunde muss' },
+  { value: 'kann', label: 'Doppelstunde kann' },
+  { value: 'nein', label: 'Keine Doppelstunde' },
+];
+
+const CURRICULUM_NACHMITTAG_OPTIONS = [
+  { value: '', label: 'Vererbt (Fach-Standard)' },
+  { value: 'muss', label: 'Nachmittag muss' },
+  { value: 'kann', label: 'Nachmittag kann' },
+  { value: 'nein', label: 'Kein Nachmittag' },
+];
+
 export function createDataMaintenanceView() {
   const container = document.createElement('section');
   container.className = 'space-y-6';
@@ -64,6 +78,11 @@ export function createDataMaintenanceView() {
     tabs.querySelectorAll('.tab').forEach(tab => {
       tab.classList.toggle('tab-active', tab.dataset.entry === id);
     });
+    try {
+      localStorage.setItem('maintenance-active-tab', id);
+    } catch {
+      // ignore storage issues
+    }
     if (activeSection?.destroy) activeSection.destroy();
     sectionWrap.innerHTML = '';
 
@@ -76,7 +95,19 @@ export function createDataMaintenanceView() {
     if (activeSection?.element) sectionWrap.appendChild(activeSection.element);
   }
 
-  switchSection('teachers');
+  function preferredTab() {
+    try {
+      const stored = localStorage.getItem('maintenance-active-tab');
+      if (entries.some(entry => entry.id === stored)) {
+        return stored;
+      }
+    } catch {
+      // ignore read errors
+    }
+    return 'teachers';
+  }
+
+  switchSection(preferredTab());
   return container;
 }
 
@@ -528,19 +559,23 @@ function createSubjectsSection() {
   ]);
   wrap.appendChild(table.wrapper);
 
-  const state = { subjects: [], rooms: [] };
+  const state = { subjects: [], rooms: [], classes: [], curriculumMap: new Map() };
   const setStatus = status.set;
   const clearStatus = status.clear;
 
   async function loadData() {
     setStatus('Lade Fächer…');
     try {
-      const [subjects, rooms] = await Promise.all([
+      const [subjects, rooms, classes, curriculum] = await Promise.all([
         fetchSubjects(),
         fetchRooms(),
+        fetchClasses(),
+        fetchCurriculum(),
       ]);
       state.subjects = subjects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       state.rooms = rooms.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      state.classes = classes.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      state.curriculumMap = new Map(curriculum.map(entry => [`${entry.class_id}|${entry.subject_id}`, normalizeSubjectCurriculumEntry(entry)]));
       renderRows();
       setStatus(`${state.subjects.length} Fächer geladen.`);
       setTimeout(clearStatus, 2000);
@@ -578,6 +613,375 @@ function createSubjectsSection() {
       status.destroy();
     },
   };
+
+  function curriculumKey(classId, subjectId) {
+    return `${classId}|${subjectId}`;
+  }
+
+  function normalizeSubjectCurriculumEntry(entry = {}) {
+    if (!entry) return {};
+    return {
+      ...entry,
+      participation: entry.participation || 'curriculum',
+      doppelstunde: entry.doppelstunde || null,
+      nachmittag: entry.nachmittag || null,
+    };
+  }
+
+  function updateCurriculumState(entry) {
+    if (!entry) return;
+    const normalized = normalizeSubjectCurriculumEntry(entry);
+    const key = curriculumKey(normalized.class_id, normalized.subject_id);
+    state.curriculumMap.set(key, normalized);
+    state.curriculum = Array.from(state.curriculumMap.values());
+  }
+
+  function removeCurriculumState(classId, subjectId) {
+    const key = curriculumKey(classId, subjectId);
+    state.curriculumMap.delete(key);
+    state.curriculum = Array.from(state.curriculumMap.values());
+  }
+
+  function openSubjectConfigModal(subject) {
+    if (!subject?.id) return;
+    if (!state.classes.length) {
+      setStatus('Keine Klassen geladen.', true);
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 z-[120] flex items-center justify-center bg-base-300/70 backdrop-blur-sm p-4';
+
+    const modal = document.createElement('div');
+    modal.className = 'bg-base-100 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col';
+
+    const header = document.createElement('div');
+    header.className = 'flex items-start justify-between gap-4 border-b border-base-200 px-6 py-4';
+
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('h3');
+    title.className = 'text-xl font-semibold';
+    title.textContent = `Stundentafel · ${subject.name || subject.kuerzel || 'Fach'}`;
+    const subtitle = document.createElement('p');
+    subtitle.className = 'text-sm opacity-70';
+    const defaultDoppel = subject.default_doppelstunde || '';
+    const defaultNachmittag = subject.default_nachmittag || '';
+    subtitle.textContent = [
+      defaultDoppel ? `Doppelstunde: ${labelForSubjectDefault(defaultDoppel)}` : 'Doppelstunde: –',
+      defaultNachmittag ? `Nachmittag: ${labelForNachmittagDefault(defaultNachmittag)}` : 'Nachmittag: –',
+    ].join(' · ');
+    titleWrap.append(title, subtitle);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-sm btn-ghost';
+    closeBtn.textContent = '✕';
+
+    header.append(titleWrap, closeBtn);
+
+    const content = document.createElement('div');
+    content.className = 'overflow-auto px-6 py-4 flex-1';
+
+    const hint = document.createElement('p');
+    hint.className = 'text-xs opacity-70 mb-3';
+    hint.textContent = 'Änderungen werden beim Verlassen des Feldes automatisch gespeichert. Leere Stunden entfernen den Eintrag und nutzen die Fach-Standards.';
+
+    const table = document.createElement('table');
+    table.className = 'table table-zebra w-full text-sm';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Klasse', 'Wochenstunden', 'Doppelstunde', 'Nachmittag', 'Teilnahme'].forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+
+    const tbody = document.createElement('tbody');
+
+    const statusLine = document.createElement('div');
+    statusLine.className = 'text-xs min-h-[1.25rem] px-6 py-2 border-t border-base-200';
+
+    let statusTimer = null;
+    function setModalStatus(message, error = false) {
+      clearTimeout(statusTimer);
+      statusLine.textContent = message || '';
+      statusLine.classList.remove('text-error', 'text-success');
+      if (message) {
+        statusLine.classList.add(error ? 'text-error' : 'text-success');
+        statusTimer = setTimeout(() => {
+          statusLine.textContent = '';
+          statusLine.classList.remove('text-error', 'text-success');
+        }, error ? 4000 : 1800);
+      }
+    }
+
+    state.classes.forEach(cls => {
+      const entryKey = curriculumKey(cls.id, subject.id);
+      const existing = state.curriculumMap.get(entryKey);
+      const rowState = {
+        classId: cls.id,
+        subjectId: subject.id,
+        entryId: existing?.id ?? null,
+        hours: existing?.wochenstunden ?? '',
+        participation: existing?.participation || 'curriculum',
+        doppelstunde: existing?.doppelstunde || '',
+        nachmittag: existing?.nachmittag || '',
+      };
+
+      const row = document.createElement('tr');
+      const classCell = document.createElement('td');
+      classCell.textContent = cls.name || `Klasse #${cls.id}`;
+      row.appendChild(classCell);
+
+      const hoursCell = document.createElement('td');
+      const hoursInput = document.createElement('input');
+      hoursInput.type = 'number';
+      hoursInput.min = '0';
+      hoursInput.placeholder = '0';
+      hoursInput.className = 'input input-bordered input-sm w-24';
+      hoursInput.value = rowState.hours !== '' ? rowState.hours : '';
+      hoursCell.appendChild(hoursInput);
+      row.appendChild(hoursCell);
+
+      const doubleCell = document.createElement('td');
+      const doubleSelect = document.createElement('select');
+      doubleSelect.className = 'select select-bordered select-sm w-full';
+      doubleSelect.innerHTML = CURRICULUM_DOPPEL_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+      doubleSelect.value = rowState.doppelstunde || '';
+      doubleCell.appendChild(doubleSelect);
+      row.appendChild(doubleCell);
+
+      const afternoonCell = document.createElement('td');
+      const afternoonSelect = document.createElement('select');
+      afternoonSelect.className = 'select select-bordered select-sm w-full';
+      afternoonSelect.innerHTML = CURRICULUM_NACHMITTAG_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+      afternoonSelect.value = rowState.nachmittag || '';
+      afternoonCell.appendChild(afternoonSelect);
+      row.appendChild(afternoonCell);
+
+      const participationCell = document.createElement('td');
+      const participationSelect = document.createElement('select');
+      participationSelect.className = 'select select-bordered select-sm w-full';
+      participationSelect.innerHTML = CURRICULUM_PARTICIPATION_OPTIONS.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+      participationSelect.value = rowState.participation || 'curriculum';
+      participationCell.appendChild(participationSelect);
+      row.appendChild(participationCell);
+
+      const controls = {
+        hoursInput,
+        doubleSelect,
+        afternoonSelect,
+        participationSelect,
+      };
+
+      function updateControlsState() {
+        const hoursValue = parseHours(rowState.hours);
+        const hasHours = hoursValue !== null;
+        const isActive = hasHours || !!rowState.entryId;
+        doubleSelect.disabled = !isActive;
+        afternoonSelect.disabled = !isActive;
+        participationSelect.disabled = !isActive;
+      }
+
+      hoursInput.addEventListener('input', () => {
+        rowState.hours = hoursInput.value;
+        updateControlsState();
+      });
+      hoursInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          hoursInput.blur();
+        }
+      });
+      hoursInput.addEventListener('blur', () => {
+        rowState.hours = hoursInput.value;
+        persistRow(rowState, controls);
+      });
+
+      doubleSelect.addEventListener('change', () => {
+        rowState.doppelstunde = doubleSelect.value;
+        persistRow(rowState, controls);
+      });
+      afternoonSelect.addEventListener('change', () => {
+        rowState.nachmittag = afternoonSelect.value;
+        persistRow(rowState, controls);
+      });
+      participationSelect.addEventListener('change', () => {
+        rowState.participation = participationSelect.value;
+        persistRow(rowState, controls);
+      });
+
+      function parseHours(raw) {
+        const trimmed = (raw ?? '').toString().trim();
+        if (!trimmed) return null;
+        const value = Number(trimmed);
+        if (!Number.isFinite(value) || value <= 0) return null;
+        return value;
+      }
+
+      async function persistRow(currentState, currentControls) {
+        const hoursValue = parseHours(currentState.hours);
+        const hasHours = hoursValue !== null;
+        const payloadBase = {
+          participation: currentState.participation || 'curriculum',
+          doppelstunde: currentState.doppelstunde || null,
+          nachmittag: currentState.nachmittag || null,
+        };
+
+        try {
+          if (hasHours) {
+            if (currentState.entryId) {
+              const updated = await updateCurriculum(currentState.entryId, {
+                ...payloadBase,
+                wochenstunden: hoursValue,
+              });
+              const normalized = normalizeSubjectCurriculumEntry(updated || { ...currentState, wochenstunden: hoursValue });
+              Object.assign(currentState, {
+                entryId: normalized.id,
+                hours: normalized.wochenstunden,
+                participation: normalized.participation,
+                doppelstunde: normalized.doppelstunde || '',
+                nachmittag: normalized.nachmittag || '',
+              });
+              currentControls.hoursInput.value = normalized.wochenstunden ?? '';
+              currentControls.doubleSelect.value = currentState.doppelstunde || '';
+              currentControls.afternoonSelect.value = currentState.nachmittag || '';
+              currentControls.participationSelect.value = currentState.participation || 'curriculum';
+              setModalStatus('Gespeichert.');
+              updateCurriculumState(normalized);
+            } else {
+              const created = await createCurriculum({
+                class_id: currentState.classId,
+                subject_id: currentState.subjectId,
+                wochenstunden: hoursValue,
+                participation: payloadBase.participation,
+                doppelstunde: payloadBase.doppelstunde,
+                nachmittag: payloadBase.nachmittag,
+              });
+              const normalized = normalizeSubjectCurriculumEntry(created);
+              Object.assign(currentState, {
+                entryId: normalized.id,
+                hours: normalized.wochenstunden,
+                participation: normalized.participation,
+                doppelstunde: normalized.doppelstunde || '',
+                nachmittag: normalized.nachmittag || '',
+              });
+              currentControls.hoursInput.value = normalized.wochenstunden ?? '';
+              currentControls.doubleSelect.value = currentState.doppelstunde || '';
+              currentControls.afternoonSelect.value = currentState.nachmittag || '';
+              currentControls.participationSelect.value = currentState.participation || 'curriculum';
+              setModalStatus('Eintrag angelegt.');
+              updateCurriculumState(normalized);
+            }
+          } else if (currentState.entryId) {
+            await deleteCurriculum(currentState.entryId);
+            removeCurriculumState(currentState.classId, currentState.subjectId);
+            Object.assign(currentState, {
+              entryId: null,
+              hours: '',
+              participation: 'curriculum',
+              doppelstunde: '',
+              nachmittag: '',
+            });
+            currentControls.hoursInput.value = '';
+            currentControls.doubleSelect.value = '';
+            currentControls.afternoonSelect.value = '';
+            currentControls.participationSelect.value = 'curriculum';
+            setModalStatus('Eintrag entfernt.');
+          } else {
+            currentControls.hoursInput.value = '';
+            currentControls.doubleSelect.value = '';
+            currentControls.afternoonSelect.value = '';
+            currentControls.participationSelect.value = 'curriculum';
+          }
+        } catch (err) {
+          setModalStatus(`Fehler: ${formatError(err)}`, true);
+          const existingEntry = state.curriculumMap.get(curriculumKey(currentState.classId, currentState.subjectId));
+          if (existingEntry) {
+            currentControls.hoursInput.value = existingEntry.wochenstunden ?? '';
+            currentControls.doubleSelect.value = existingEntry.doppelstunde || '';
+            currentControls.afternoonSelect.value = existingEntry.nachmittag || '';
+            currentControls.participationSelect.value = existingEntry.participation || 'curriculum';
+            Object.assign(currentState, {
+              entryId: existingEntry.id,
+              hours: existingEntry.wochenstunden ?? '',
+              participation: existingEntry.participation || 'curriculum',
+              doppelstunde: existingEntry.doppelstunde || '',
+              nachmittag: existingEntry.nachmittag || '',
+            });
+          } else {
+            currentControls.hoursInput.value = '';
+            currentControls.doubleSelect.value = '';
+            currentControls.afternoonSelect.value = '';
+            currentControls.participationSelect.value = 'curriculum';
+            Object.assign(currentState, {
+              entryId: null,
+              hours: '',
+              participation: 'curriculum',
+              doppelstunde: '',
+              nachmittag: '',
+            });
+          }
+        }
+        updateControlsState();
+      }
+
+      updateControlsState();
+      tbody.appendChild(row);
+    });
+
+    table.append(thead, tbody);
+    content.append(hint, table);
+
+    const footer = document.createElement('div');
+    footer.className = 'px-6 py-3 border-t border-base-200 flex items-center justify-between text-xs';
+    const legend = document.createElement('p');
+    legend.className = 'opacity-70';
+    legend.textContent = 'Leere Stunden löschen den Eintrag. Einstellungen ohne Eintrag nutzen die Fach-Standards.';
+    const closeFooterBtn = document.createElement('button');
+    closeFooterBtn.className = 'btn btn-sm';
+    closeFooterBtn.type = 'button';
+    closeFooterBtn.textContent = 'Schließen';
+    footer.append(legend, closeFooterBtn);
+
+    modal.append(header, content, statusLine, footer);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function closeModal() {
+      clearTimeout(statusTimer);
+      overlay.remove();
+      window.removeEventListener('keydown', onKeydown);
+    }
+
+    function onKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeModal();
+      }
+    }
+
+    window.addEventListener('keydown', onKeydown);
+    closeBtn.addEventListener('click', closeModal);
+    closeFooterBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) {
+        closeModal();
+      }
+    });
+  }
+
+  function labelForSubjectDefault(value) {
+    const match = SUBJECT_DOPPEL_OPTIONS.find(opt => opt.value === value);
+    return match ? match.label : value;
+  }
+
+  function labelForNachmittagDefault(value) {
+    const match = SUBJECT_NACHMITTAG_OPTIONS.find(opt => opt.value === value);
+    return match ? match.label : value;
+  }
 
   function subjectInputCell(subject, field, setStatusFn, clearStatusFn, opts = {}) {
     const td = document.createElement('td');
@@ -760,10 +1164,18 @@ function createSubjectsSection() {
   function subjectActionCell(subject, setStatusFn, clearStatusFn, reloadFn) {
     const td = document.createElement('td');
     td.className = 'text-right';
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-ghost btn-sm text-error';
-    btn.textContent = 'Löschen';
-    btn.addEventListener('click', async () => {
+    const actionWrap = document.createElement('div');
+    actionWrap.className = 'flex justify-end gap-2';
+
+    const configBtn = document.createElement('button');
+    configBtn.className = 'btn btn-secondary btn-sm';
+    configBtn.textContent = 'Stundentafel';
+    configBtn.addEventListener('click', () => openSubjectConfigModal(subject));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-ghost btn-sm text-error';
+    deleteBtn.textContent = 'Löschen';
+    deleteBtn.addEventListener('click', async () => {
       const confirmed = await confirmModal({
         title: 'Fach löschen',
         message: `Fach "${subject.name}" wirklich löschen?`,
@@ -780,7 +1192,8 @@ function createSubjectsSection() {
         setStatusFn(`Fehler: ${formatError(err)}`, true);
       }
     });
-    td.appendChild(btn);
+    actionWrap.append(configBtn, deleteBtn);
+    td.appendChild(actionWrap);
     return td;
   }
 
@@ -1258,6 +1671,8 @@ function createCurriculumSection() {
     return {
       ...entry,
       participation: entry.participation || 'curriculum',
+      doppelstunde: entry.doppelstunde || null,
+      nachmittag: entry.nachmittag || null,
     };
   }
 

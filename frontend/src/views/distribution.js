@@ -1,6 +1,6 @@
 import { fetchTeachers } from '../api/teachers.js';
 import { fetchClasses } from '../api/classes.js';
-import { fetchSubjects, updateSubject } from '../api/subjects.js';
+import { fetchSubjects } from '../api/subjects.js';
 import { fetchCurriculum } from '../api/curriculum.js';
 import { fetchRooms } from '../api/rooms.js';
 import { fetchVersions, createVersion, updateVersion, deleteVersion } from '../api/versions.js';
@@ -138,6 +138,8 @@ function labelForOption(options, value) {
       state.curriculum = curriculum.map(entry => ({
         ...entry,
         participation: entry.participation || 'curriculum',
+        doppelstunde: entry.doppelstunde || null,
+        nachmittag: entry.nachmittag || null,
       }));
       state.versions = versions;
       state.rooms = rooms;
@@ -712,11 +714,11 @@ function labelForOption(options, value) {
             const controls = document.createElement('div');
             controls.className = 'flex items-center gap-1';
 
-            const settingsBtn = document.createElement('button');
-            settingsBtn.type = 'button';
-            settingsBtn.className = 'btn btn-ghost btn-xs';
-            settingsBtn.textContent = '⚙';
-            settingsBtn.title = 'Einstellungen';
+            const infoBtn = document.createElement('button');
+            infoBtn.type = 'button';
+            infoBtn.className = 'btn btn-ghost btn-xs';
+            infoBtn.textContent = 'ℹ';
+            infoBtn.title = 'Konfiguration anzeigen';
 
             const minusBtn = document.createElement('button');
             minusBtn.type = 'button';
@@ -728,7 +730,7 @@ function labelForOption(options, value) {
             removeBtn.className = 'btn btn-ghost btn-xs text-error';
             removeBtn.textContent = '×';
 
-            controls.append(settingsBtn, minusBtn, removeBtn);
+            controls.append(infoBtn, minusBtn, removeBtn);
             row.append(labelCol, controls);
             assignmentList.appendChild(row);
 
@@ -750,7 +752,7 @@ function labelForOption(options, value) {
               currentDragPayload = null;
             });
 
-            settingsBtn.addEventListener('click', () => openRequirementSettings(entry, teacher));
+            infoBtn.addEventListener('click', () => promptSubjectConfigNavigation(entry));
             minusBtn.addEventListener('click', () => adjustAssignment(entry, teacher.id, -1));
             removeBtn.addEventListener('click', async () => {
               const confirmed = await confirmModal({
@@ -911,105 +913,6 @@ function labelForOption(options, value) {
     return load.used + amount <= load.limit;
   }
 
-  async function openRequirementSettings(entry, teacher) {
-    if (!entry?.records?.length) return;
-    const baseRecord = entry.records[0];
-    const subject = maps.subjects.get(entry.subjectId);
-    const cls = maps.classes.get(entry.classId);
-
-    const currentDs = baseRecord.doppelstunde || 'kann';
-    const currentNm = baseRecord.nachmittag || 'kann';
-    const currentParticipation = baseRecord.participation || 'curriculum';
-    const currentRoomId = subject?.required_room_id ? String(subject.required_room_id) : '';
-
-    const roomOptions = [
-      { value: '', label: 'Kein Pflicht-Raum' },
-      ...state.rooms.map(room => ({ value: String(room.id), label: room.name || `#${room.id}` })),
-    ];
-
-    const values = await formModal({
-      title: 'Planungsparameter anpassen',
-      message: [
-        formatSubjectLabel(subject),
-        formatClassLabel(cls),
-        teacher?.name || maps.teachers.get(baseRecord.teacher_id)?.name || '',
-      ].filter(Boolean).join(' · '),
-      confirmText: 'Speichern',
-      fields: [
-        {
-          name: 'doppelstunde',
-          label: 'Doppelstunde',
-          type: 'select',
-          options: DOPPEL_OPTIONS,
-          value: currentDs,
-        },
-        {
-          name: 'nachmittag',
-          label: 'Nachmittag',
-          type: 'select',
-          options: NACHMITTAG_OPTIONS,
-          value: currentNm,
-        },
-        {
-          name: 'participation',
-          label: 'Teilnahme',
-          type: 'select',
-          options: PARTICIPATION_OPTIONS,
-          value: currentParticipation,
-        },
-        {
-          name: 'required_room_id',
-          label: 'Pflichtraum',
-          type: 'select',
-          options: roomOptions,
-          value: currentRoomId,
-        },
-      ],
-    });
-    if (!values) return;
-
-    const newDs = values.doppelstunde || currentDs;
-    const newNm = values.nachmittag || currentNm;
-    const newParticipation = values.participation || currentParticipation;
-    const newRoomId = values.required_room_id ? Number(values.required_room_id) : null;
-
-    setStatus('Speichere Einstellungen…');
-    try {
-      await Promise.all(entry.records.map(async rec => {
-        const payload = {
-          class_id: rec.class_id,
-          subject_id: rec.subject_id,
-          teacher_id: rec.teacher_id,
-          version_id: rec.version_id,
-          wochenstunden: rec.wochenstunden,
-          doppelstunde: newDs,
-          nachmittag: newNm,
-          participation: newParticipation,
-        };
-        const updated = await updateRequirement(rec.id, payload);
-        Object.assign(rec, updated);
-        const idx = state.requirements.findIndex(item => item.id === rec.id);
-        if (idx >= 0) {
-          state.requirements[idx] = rec;
-        }
-      }));
-
-      if (subject && (subject.required_room_id ?? null) !== newRoomId) {
-        const updatedSubject = await updateSubject(subject.id, { required_room_id: newRoomId });
-        Object.assign(subject, updatedSubject);
-        const sIdx = state.subjects.findIndex(item => item.id === subject.id);
-        if (sIdx >= 0) state.subjects[sIdx] = subject;
-        maps.subjects.set(subject.id, subject);
-      }
-
-      setStatus('Einstellungen gespeichert.');
-      setTimeout(clearStatus, 1500);
-      renderBoard();
-    } catch (err) {
-      setStatus(`Fehler: ${formatError(err)}`, true);
-    }
-  }
-
   async function assignHour(teacherId, classId, subjectId, amount = 1) {
     setStatus('Speichere Zuweisung…');
     try {
@@ -1031,15 +934,18 @@ function labelForOption(options, value) {
         const subject = maps.subjects.get(subjectId);
         const curriculumEntry = state.curriculum.find(entry => entry.class_id === classId && entry.subject_id === subjectId);
         const participationDefault = curriculumEntry?.participation || (subject?.is_ag_foerder ? 'ag' : 'curriculum');
+        const doppelDefault = curriculumEntry?.doppelstunde ?? subject?.default_doppelstunde ?? null;
+        const nachmittagDefault = curriculumEntry?.nachmittag ?? subject?.default_nachmittag ?? null;
         const created = await createRequirement({
           class_id: classId,
           subject_id: subjectId,
           teacher_id: teacherId,
           version_id: state.selectedVersionId,
           wochenstunden: amount,
-          doppelstunde: subject?.default_doppelstunde ?? null,
-          nachmittag: subject?.default_nachmittag ?? null,
+          doppelstunde: doppelDefault,
+          nachmittag: nachmittagDefault,
           participation: participationDefault,
+          config_source: 'subject',
         });
         state.requirements.push(created);
       }
@@ -1385,6 +1291,33 @@ function countRemainingHours(map) {
     }
 
     return parts.join(' · ');
+  }
+
+  async function promptSubjectConfigNavigation(entry) {
+    const subject = maps.subjects.get(entry.subjectId);
+    const cls = maps.classes.get(entry.classId);
+    const message = [
+      subject ? `Fach: ${formatSubjectLabel(subject)}` : null,
+      cls ? `Klasse: ${formatClassLabel(cls)}` : null,
+      'Doppelstunden, Nachmittagsregeln und Teilnahme pflegst du zentral unter Datenpflege > Fächer.',
+    ].filter(Boolean).join('\n');
+
+    const confirmed = await confirmModal({
+      title: 'Fach-Konfiguration',
+      message,
+      confirmText: 'Datenpflege öffnen',
+      cancelText: 'Schließen',
+      confirmButtonClass: 'btn btn-sm btn-primary',
+      cancelButtonClass: 'btn btn-sm btn-ghost',
+    });
+    if (confirmed) {
+      try {
+        localStorage.setItem('maintenance-active-tab', 'subjects');
+      } catch {
+        // ignore storage issues
+      }
+      window.location.hash = '#/datenpflege';
+    }
   }
 
 function stateClassesSorted() {

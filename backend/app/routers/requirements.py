@@ -6,7 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..database import get_session
-from ..models import Class, Requirement, Subject, Teacher
+from ..models import (
+    Class,
+    Requirement,
+    Subject,
+    Teacher,
+    RequirementConfigSourceEnum,
+)
+from ..services.subject_config import apply_subject_defaults
 
 
 router = APIRouter(prefix="/requirements", tags=["requirements"])
@@ -29,6 +36,13 @@ def create_requirement(req: Requirement, session: Session = Depends(get_session)
         raise HTTPException(status_code=400, detail="subject_id invalid")
     if not session.get(Teacher, req.teacher_id):
         raise HTTPException(status_code=400, detail="teacher_id invalid")
+    if isinstance(req.config_source, str):
+        try:
+            req.config_source = RequirementConfigSourceEnum(req.config_source)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="config_source invalid")
+    if req.config_source != RequirementConfigSourceEnum.manual:
+        apply_subject_defaults(session, req)
     session.add(req)
     session.commit()
     session.refresh(req)
@@ -55,13 +69,24 @@ def update_requirement(req_id: int, payload: Requirement, session: Session = Dep
         r.teacher_id = payload.teacher_id
     if payload.wochenstunden is not None:
         r.wochenstunden = payload.wochenstunden
-    if payload.doppelstunde is not None:
-        r.doppelstunde = payload.doppelstunde
-    if payload.nachmittag is not None:
-        r.nachmittag = payload.nachmittag
     fields_set = getattr(payload, "__fields_set__", set())
     if "participation" in fields_set and payload.participation is not None:
         r.participation = payload.participation
+    if "config_source" in fields_set and payload.config_source is not None:
+        new_source = payload.config_source
+        if isinstance(new_source, str):
+            try:
+                new_source = RequirementConfigSourceEnum(new_source)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="config_source invalid")
+        r.config_source = new_source
+    if r.config_source != RequirementConfigSourceEnum.manual:
+        apply_subject_defaults(session, r)
+    else:
+        if payload.doppelstunde is not None:
+            r.doppelstunde = payload.doppelstunde
+        if payload.nachmittag is not None:
+            r.nachmittag = payload.nachmittag
     session.add(r)
     session.commit()
     session.refresh(r)

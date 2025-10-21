@@ -14,6 +14,12 @@ class DoppelstundeEnum(str, Enum):
     nein = "nein"
 
 
+class RequirementConfigSourceEnum(str, Enum):
+    subject = "subject"
+    manual = "manual"
+    import_batch = "import"
+
+
 class NachmittagEnum(str, Enum):
     muss = "muss"
     kann = "kann"
@@ -75,6 +81,7 @@ class Requirement(SQLModel, table=True):
     participation: RequirementParticipationEnum = Field(default=RequirementParticipationEnum.curriculum)
     # Optional version grouping
     version_id: Optional[int] = Field(default=None, foreign_key="distributionversion.id")
+    config_source: RequirementConfigSourceEnum = Field(default=RequirementConfigSourceEnum.subject)
 
     # Bewusste Vereinfachung: keine ORM-Relationships notwendig
 
@@ -88,6 +95,8 @@ class ClassSubject(SQLModel, table=True):
     subject_id: int = Field(foreign_key="subject.id")
     wochenstunden: int
     participation: RequirementParticipationEnum = Field(default=RequirementParticipationEnum.curriculum)
+    doppelstunde: Optional[DoppelstundeEnum] = Field(default=None)
+    nachmittag: Optional[NachmittagEnum] = Field(default=None)
 
 
 class RuleProfile(SQLModel, table=True):

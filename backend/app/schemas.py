@@ -124,6 +124,8 @@ class BackupCurriculumItem(BaseModel):
     subject_name: str
     wochenstunden: int
     participation: Optional[str] = None
+    doppelstunde: Optional[str] = None
+    nachmittag: Optional[str] = None
 
 
 class BackupRequirementItem(BaseModel):
@@ -135,6 +137,7 @@ class BackupRequirementItem(BaseModel):
     nachmittag: Optional[str] = None    # "muss"|"kann"|"nein"
     version_name: Optional[str] = None
     participation: Optional[str] = None
+    config_source: Optional[str] = None
 
 
 class BackupRoom(BaseModel):

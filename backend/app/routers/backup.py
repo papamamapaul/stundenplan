@@ -18,6 +18,7 @@ from ..models import (
     DoppelstundeEnum,
     NachmittagEnum,
     DistributionVersion,
+    RequirementConfigSourceEnum,
 )
 from ..schemas import (
     BackupPayload,
@@ -106,6 +107,8 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             subject_name=subject_by_id[cs.subject_id].name if subject_by_id.get(cs.subject_id) else str(cs.subject_id),
             wochenstunden=cs.wochenstunden,
             participation=cs.participation.value if getattr(cs, "participation", None) else None,
+            doppelstunde=cs.doppelstunde.value if getattr(cs, "doppelstunde", None) else None,
+            nachmittag=cs.nachmittag.value if getattr(cs, "nachmittag", None) else None,
         )
         for cs in curriculum
     ]
@@ -119,6 +122,11 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
             doppelstunde=r.doppelstunde.value,
             nachmittag=r.nachmittag.value,
             participation=r.participation.value if r.participation else None,
+            config_source=(
+                r.config_source.value
+                if isinstance(r.config_source, RequirementConfigSourceEnum)
+                else (r.config_source if isinstance(r.config_source, str) else None)
+            ),
         )
         for r in requirements
     ]
@@ -291,13 +299,26 @@ def import_data(
         if not cls or not sub:
             raise HTTPException(status_code=400, detail=f"Unbekannte Klasse/Fach in curriculum: {item.class_name}/{item.subject_name}")
         participation = RequirementParticipationEnum(item.participation) if item.participation else RequirementParticipationEnum.curriculum
+        doppel = DoppelstundeEnum(item.doppelstunde) if item.doppelstunde else None
+        nachmittag = NachmittagEnum(item.nachmittag) if item.nachmittag else None
         existing = session.exec(select(ClassSubject).where(ClassSubject.class_id == cls.id, ClassSubject.subject_id == sub.id)).first()
         if existing:
             existing.wochenstunden = item.wochenstunden
             existing.participation = participation
+            existing.doppelstunde = doppel
+            existing.nachmittag = nachmittag
             session.add(existing)
         else:
-            session.add(ClassSubject(class_id=cls.id, subject_id=sub.id, wochenstunden=item.wochenstunden, participation=participation))
+            session.add(
+                ClassSubject(
+                    class_id=cls.id,
+                    subject_id=sub.id,
+                    wochenstunden=item.wochenstunden,
+                    participation=participation,
+                    doppelstunde=doppel,
+                    nachmittag=nachmittag,
+                )
+            )
         session.commit()
 
     # Requirements (upsert by class+subject pair)
@@ -316,12 +337,14 @@ def import_data(
         ds = item.doppelstunde or DoppelstundeEnum.kann.value
         nm = item.nachmittag or NachmittagEnum.kann.value
         participation = RequirementParticipationEnum(item.participation) if item.participation else RequirementParticipationEnum.curriculum
+        config_source = RequirementConfigSourceEnum(item.config_source) if item.config_source else RequirementConfigSourceEnum.subject
         if existing:
             existing.teacher_id = t.id
             existing.wochenstunden = item.wochenstunden
             existing.doppelstunde = DoppelstundeEnum(ds)
             existing.nachmittag = NachmittagEnum(nm)
             existing.participation = participation
+            existing.config_source = config_source
             session.add(existing)
         else:
             session.add(
@@ -333,6 +356,7 @@ def import_data(
                     doppelstunde=DoppelstundeEnum(ds),
                     nachmittag=NachmittagEnum(nm),
                     participation=participation,
+                    config_source=config_source,
                 )
             )
         session.commit()
