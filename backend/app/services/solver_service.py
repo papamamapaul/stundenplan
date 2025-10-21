@@ -39,7 +39,7 @@ def _rules_to_dict(rule_profile: Dict[str, int | bool] | None) -> Dict[str, int 
     return dict(rule_profile)
 
 
-def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = None) -> Tuple[pd.DataFrame, List[int], List[str], List[str]]:
+def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = None) -> Tuple[pd.DataFrame, List[int], List[str], List[str], Dict[int, Dict[str, bool]]]:
     _ensure_solver_schema(session)
     # Holt Requirements + Namen und baut das Erwartungs-DF
     stmt = select(Requirement)
@@ -52,13 +52,24 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
     # Name-Lookups
     subject_rows = session.exec(select(Subject)).all()
     room_rows = session.exec(select(Room)).all()
+    teacher_rows = session.exec(select(Teacher)).all()
     subjects = {s.id: s.name for s in subject_rows}
     subject_room = {s.id: s.required_room_id for s in subject_rows}
     rooms = {r.id: r.name for r in room_rows}
     subject_band = {s.id: bool(s.is_bandfach) for s in subject_rows}
     subject_ag = {s.id: bool(s.is_ag_foerder) for s in subject_rows}
     subject_alias = {s.id: s.alias_subject_id for s in subject_rows}
-    teachers = {t.id: t.name for t in session.exec(select(Teacher)).all()}
+    teachers = {t.id: t.name for t in teacher_rows}
+    teacher_workdays = {
+        t.id: {
+            "Mo": bool(t.work_mo),
+            "Di": bool(t.work_di),
+            "Mi": bool(t.work_mi),
+            "Do": bool(t.work_do),
+            "Fr": bool(t.work_fr),
+        }
+        for t in teacher_rows
+    }
     classes = {c.id: c.name for c in session.exec(select(Class)).all()}
 
     def _canonical_subject_id(subject_id: int) -> int:
@@ -95,6 +106,7 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
             "Participation": participation,
             "CanonicalSubjectId": canonical_id,
             "CanonicalSubject": canonical_names.get(r.subject_id, subjects.get(r.subject_id, str(r.subject_id))),
+            "TeacherId": r.teacher_id,
         }
         record["Bandfach"] = bool(is_bandfach)
         record["AGFoerder"] = bool(subject_ag.get(r.subject_id, False))
@@ -104,7 +116,7 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
     FACH_ID = list(df.index)
     KLASSEN = [str(x) for x in sorted(df["Klasse"].unique(), key=lambda v: int(str(v)) if str(v).isdigit() else str(v))]
     LEHRER = sorted(df["Lehrer"].astype(str).unique())
-    return df, FACH_ID, KLASSEN, LEHRER
+    return df, FACH_ID, KLASSEN, LEHRER, teacher_workdays
 
 
 def _ensure_solver_schema(session: Session) -> None:
@@ -127,6 +139,7 @@ def solve_best_plan(
     KLASSEN: List[str],
     LEHRER: List[str],
     regeln: Dict[str, int | bool],
+    teacher_workdays: Optional[Dict[int, Dict[str, bool]]] = None,
     room_plan: Optional[Dict[int, Dict[str, List[bool]]]] = None,
     fixed_slots: Optional[Dict[int, List[Tuple[str, int]]]] = None,
     flexible_groups: Optional[List[Dict[str, object]]] = None,
@@ -175,6 +188,7 @@ def solve_best_plan(
             KLASSEN,
             LEHRER,
             regeln,
+            teacher_workdays=teacher_workdays,
             room_plan=room_plan,
             fixed_slots=fixed_slots,
             flexible_groups=flexible_groups,

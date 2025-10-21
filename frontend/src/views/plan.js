@@ -65,7 +65,7 @@ const RULE_GROUPS = [
     id: 'lehrer',
     label: 'Lehrkräfte',
     description: 'Optimiert Freistunden von Lehrkräften.',
-    keys: ['lehrer_hohlstunden_soft'],
+    keys: ['lehrer_arbeitstage', 'lehrer_hohlstunden_soft'],
   },
 ];
 
@@ -2003,13 +2003,16 @@ export function createPlanView() {
       slots.push(cloneSlot(value));
     });
     slots.sort((a, b) => {
-      if (a.tag === b.tag) {
-        if (a.stunde === b.stunde) {
-          return a.class_id - b.class_id;
-        }
-        return a.stunde - b.stunde;
+      const idxA = TAGE.indexOf(a.tag);
+      const idxB = TAGE.indexOf(b.tag);
+      const dayA = idxA === -1 ? a.tag : idxA;
+      const dayB = idxB === -1 ? b.tag : idxB;
+      if (dayA < dayB) return -1;
+      if (dayA > dayB) return 1;
+      if (a.stunde === b.stunde) {
+        return a.class_id - b.class_id;
       }
-      return a.tag.localeCompare(b.tag);
+      return a.stunde - b.stunde;
     });
     try {
       statusBar.set('Speichere bearbeiteten Plan…');
@@ -2427,6 +2430,7 @@ function createProgressModal() {
     mode = 'loading';
     confirmHandler = null;
     spinner.classList.remove('hidden');
+    spinner.style.display = 'inline-flex';
     successIcon.classList.add('hidden');
     actionWrap.classList.add('hidden');
     title.textContent = 'Plan wird erstellt…';
@@ -2437,6 +2441,7 @@ function createProgressModal() {
   function showSuccess({ title: titleText = 'Fertig!', message: messageText = 'Der Solver hat erfolgreich einen Plan erzeugt.', onConfirm } = {}) {
     mode = 'success';
     spinner.classList.add('hidden');
+    spinner.style.display = 'none';
     successIcon.classList.remove('hidden');
     actionWrap.classList.remove('hidden');
     title.textContent = titleText;

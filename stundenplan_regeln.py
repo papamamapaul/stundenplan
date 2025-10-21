@@ -13,6 +13,7 @@ def add_constraints(
     KLASSEN,
     LEHRER,
     regeln,
+    teacher_workdays=None,
     room_plan=None,
     fixed_slots=None,
     flexible_groups=None,
@@ -25,6 +26,7 @@ def add_constraints(
       - 'Fach', 'Klasse', 'Lehrer', 'Wochenstunden'
       - optional: 'Doppelstunde' in {'muss','kann','nein'}
       - optional: 'Nachmittag'   in {'muss','kann','nein'}
+      - optional: 'TeacherId'
 
     regeln (Dict, via UI):
       - stundenbedarf_vollstaendig (bool)
@@ -45,6 +47,7 @@ def add_constraints(
       - bandstunden_parallel (bool)         # Alias leseband_parallel
       - gleichverteilung (bool)
       - lehrer_hohlstunden_soft (bool)      -> Soft-Penalty für Lehrkräfte-Lücken
+      - lehrer_arbeitstage (bool)           -> respektiert Lehrer-Arbeitstage
       - mittagsschule_vormittag (bool)       -> 4/≥5-Logik je Tag/Klasse
 
     Zusätzlich (NEU): Gewichte für Soft-Objectives – kommen aus regeln, haben Defaults:
@@ -83,6 +86,7 @@ def add_constraints(
 
     enforce_hours = bool(regeln.get("stundenbedarf_vollstaendig", True))
     enforce_teacher_conflicts = bool(regeln.get("keine_lehrerkonflikte", True))
+    enforce_teacher_workdays = bool(regeln.get("lehrer_arbeitstage", True))
     allow_band_teacher_parallel = bool(regeln.get("band_lehrer_parallel", True))
     enforce_class_conflicts = bool(regeln.get("keine_klassenkonflikte", True))
     enforce_room_windows = bool(regeln.get("raum_verfuegbarkeit", True))
@@ -100,6 +104,8 @@ def add_constraints(
     teacher_gaps_day_max = max(0, int(regeln.get("TEACHER_GAPS_DAY_MAX", 1)))
     teacher_gaps_week_max = max(0, int(regeln.get("TEACHER_GAPS_WEEK_MAX", 3)))
     W_TEACHER_GAPS = int(regeln.get("W_TEACHER_GAPS", 2))
+
+    teacher_workdays = teacher_workdays or {}
 
     # -------- 1) Jede Fachstunde MUSS platziert werden --------
     for fid in FACH_ID:
@@ -170,6 +176,28 @@ def add_constraints(
                         belegte = [plan[(fid, tag, std)] for fid in FACH_ID if str(df.loc[fid, 'Klasse']) == str(klasse)]
                         if belegte:
                             model.Add(sum(belegte) <= 1)
+
+    if enforce_teacher_workdays:
+        for fid in FACH_ID:
+            teacher_value = df.loc[fid].get('TeacherId')
+            if teacher_value is None:
+                continue
+            if isinstance(teacher_value, float) and math.isnan(teacher_value):
+                continue
+            try:
+                teacher_id = int(teacher_value)
+            except (TypeError, ValueError):
+                continue
+            workdays = teacher_workdays.get(teacher_id)
+            if not workdays:
+                continue
+            for tag in TAGE:
+                if bool(workdays.get(tag, True)):
+                    continue
+                for std in range(8):
+                    key = (fid, tag, std)
+                    if key in plan:
+                        model.Add(plan[key] == 0)
 
     # -------- 2b) Räume: Verfügbarkeiten (keine Exklusivität, Basisplan steuert Slots) --------
     room_assignments = {}
@@ -440,13 +468,25 @@ def add_constraints(
                                 model.Add(single_vars[idx] == 0)
                             idx += 1
 
+                for tag in TAGE:
+                    stunden = [plan[(fid, tag, s)] for s in range(8)]
+                    for s in range(6):
+                        model.Add(stunden[s] + stunden[s+2] <= stunden[s+1] + 1)
+
             elif ds_rule == "nein":
                 for v in pair_vars:
                     model.Add(v == 0)
 
             elif ds_rule == "kann":
-                # Einzelstunden unattraktiv machen (Soft)
-                obj_terms.append(W_EINZEL_KANN * sum(single_vars))
+                if pair_vars:
+                    max_pairs = anzahl_stunden // 2
+                    model.Add(sum(pair_vars) <= max_pairs)
+
+                # Einzelstunden bevorzugen (Soft)
+                W_EINZEL_KANN = int(regeln.get("W_EINZEL_KANN", 5))
+                single_total = sum(single_vars)
+                pair_total = sum(pair_vars)
+                obj_terms.append(W_EINZEL_KANN * (pair_total * 2 - single_total))
 
         # Begrenze Alias-Fächer (z.B. Deutsch + Leseband) auf max. 2 Slots pro Tag
         canonical_map: dict[tuple[str, int | None], list[int]] = {}

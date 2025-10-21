@@ -180,6 +180,12 @@ def list_rules() -> dict:
                 "info": "Versucht Hohlstunden für Lehrkräfte zu vermeiden und straft Überschreitungen weich ab.",
             },
             {
+                "key": "lehrer_arbeitstage",
+                "label": "Lehrer nur an Arbeitstagen einplanen",
+                "default": True,
+                "info": "Respektiert die in der Lehrerpflege hinterlegten Arbeitstage.",
+            },
+            {
                 "key": "keine_hohlstunden",
                 "label": "Hohlstunden minimieren (Soft)",
                 "default": True,
@@ -294,7 +300,7 @@ def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(
     """Returns a lightweight analysis of current data for planning: counts per class/subject,
     teacher loads vs deputat, and flags presence for DS/Nachmittag in requirements.
     """
-    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session, version_id=version_id)
+    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(session, version_id=version_id)
     if df.empty:
         return {"ok": True, "empty": True}
 
@@ -356,7 +362,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         list((req.override_rules or {}).keys()),
     )
     # Daten laden
-    df, FACH_ID, KLASSEN, LEHRER = fetch_requirements_dataframe(session, version_id=version_id)
+    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(session, version_id=version_id)
     if df.empty:
         msg = "Keine Requirements in der DB – bitte zuerst Bedarf anlegen."
         if version_id is not None:
@@ -720,6 +726,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         KLASSEN=KLASSEN,
         LEHRER=LEHRER,
         regeln=effective_rules,
+        teacher_workdays=teacher_workdays,
         room_plan=room_plan or None,
         fixed_slots=fixed_slot_map or None,
         flexible_groups=flexible_groups or None,
