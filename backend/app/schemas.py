@@ -83,6 +83,10 @@ class GenerateResponse(BaseModel):
     params_used: GenerateParams
 
 
+class PlanSlotsUpdateRequest(BaseModel):
+    slots: List[PlanSlotOut]
+
+
 # Backup/export schemas
 class BackupTeacher(BaseModel):
     name: Optional[str] = None

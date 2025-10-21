@@ -1,4 +1,4 @@
-import { fetchPlanRules, fetchPlanDetail, generatePlan, updatePlan } from '../api/plans.js';
+import { fetchPlanRules, fetchPlanDetail, generatePlan, updatePlan, updatePlanSlots } from '../api/plans.js';
 import { createPlanGrid } from '../components/PlanGrid.js';
 import { fetchRuleProfiles } from '../api/ruleProfiles.js';
 import { fetchVersions } from '../api/versions.js';
@@ -149,6 +149,9 @@ export function createPlanView() {
   const resultsSection = document.createElement('div');
   resultsSection.className = 'space-y-4';
 
+  const editingSection = document.createElement('div');
+  editingSection.className = 'space-y-4 hidden';
+
   const tabs = createTabs([
     { id: 'results', label: 'Ergebnisse' },
     { id: 'analysis', label: 'Analyse' },
@@ -256,6 +259,10 @@ export function createPlanView() {
     initialPlanId,
     ruleGroupSections: new Map(),
     ruleGroupCollapsed: new Map(),
+    editing: null,
+    editingParkingSeq: 0,
+    dragPayload: null,
+    highlightedTeacherId: null,
   };
 
   const progressModal = createProgressModal();
@@ -1230,6 +1237,13 @@ export function createPlanView() {
 
   function renderResults() {
     resultsSection.innerHTML = '';
+    renderEditingSection();
+    if (editingSection.parentElement !== resultsSection) {
+      resultsSection.appendChild(editingSection);
+    } else if (!state.editing) {
+      editingSection.classList.add('hidden');
+    }
+
     if (!state.generatedPlans.length) {
       const empty = document.createElement('div');
       empty.className = 'alert alert-info';
@@ -1254,6 +1268,10 @@ export function createPlanView() {
     const filterBar = createClassFilterBar();
     if (filterBar) {
       resultsSection.appendChild(filterBar);
+    }
+
+    if (!state.editing) {
+      resultsSection.appendChild(renderTeacherHighlightControls());
     }
 
     state.generatedPlans.forEach(entry => {
@@ -1293,6 +1311,27 @@ export function createPlanView() {
       headerRow.append(titleWrap, badges);
       body.appendChild(headerRow);
 
+      const cardActions = document.createElement('div');
+      cardActions.className = 'flex flex-wrap items-center gap-2';
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      if (state.editing && state.editing.planId === entry.id) {
+        editBtn.className = 'btn btn-xs btn-secondary';
+        editBtn.textContent = 'Bearbeitung aktiv';
+        editBtn.disabled = true;
+      } else if (entry.id) {
+        editBtn.className = 'btn btn-xs btn-outline';
+        editBtn.textContent = 'Bearbeiten';
+        editBtn.addEventListener('click', () => startEditingPlan(entry));
+      } else {
+        editBtn.className = 'btn btn-xs btn-outline';
+        editBtn.textContent = 'Bearbeiten';
+        editBtn.disabled = true;
+        editBtn.title = 'Bitte zuerst speichern';
+      }
+      cardActions.appendChild(editBtn);
+      body.appendChild(cardActions);
+
       const activeRulesBlock = renderActiveRuleBadges(entry);
       if (activeRulesBlock) {
         body.appendChild(activeRulesBlock);
@@ -1304,11 +1343,697 @@ export function createPlanView() {
         subjects: state.subjects,
         teachers: state.teachers,
         visibleClasses: state.visibleClasses,
+        highlightedTeacherId: state.highlightedTeacherId,
       }));
 
       card.appendChild(body);
       resultsSection.appendChild(card);
     });
+  }
+
+  function startEditingPlan(planEntry) {
+    if (!planEntry?.id) {
+      statusBar.set('Plan kann erst nach dem Speichern bearbeitet werden.', true);
+      return;
+    }
+    state.editing = {
+      planId: planEntry.id,
+      planName: planEntry.name || `Plan #${planEntry.id}`,
+      slotsOriginal: cloneSlotsArray(planEntry.slots || []),
+      slotsMap: buildSlotsMapFromArray(planEntry.slots || []),
+      parking: [],
+      dirty: false,
+    };
+    state.editingParkingSeq = 0;
+    state.dragPayload = null;
+    renderResults();
+  }
+
+  function cancelEditingPlan() {
+    state.editing = null;
+    state.dragPayload = null;
+    renderResults();
+  }
+
+  function resetEditingPlan() {
+    if (!state.editing) return;
+    state.editing.slotsMap = buildSlotsMapFromArray(state.editing.slotsOriginal);
+    state.editing.parking = [];
+    state.editing.dirty = false;
+    state.dragPayload = null;
+    renderResults();
+  }
+
+  function setEditingDirty(value = true) {
+    if (state.editing) {
+      state.editing.dirty = value;
+    }
+  }
+
+  function toggleHighlightedTeacher(teacherId) {
+    const numericId = teacherId == null ? null : Number(teacherId);
+    state.highlightedTeacherId = state.highlightedTeacherId === numericId ? null : numericId;
+    renderResults();
+  }
+
+  function isTeacherHighlighted(teacherId) {
+    if (state.highlightedTeacherId == null) return false;
+    if (teacherId == null) return false;
+    return Number(teacherId) === Number(state.highlightedTeacherId);
+  }
+
+  function buildSlotsMapFromArray(slots = []) {
+    const map = new Map();
+    slots.forEach(slot => {
+      const key = getSlotKey(slot.class_id, slot.tag, slot.stunde);
+      map.set(key, cloneSlot(slot));
+    });
+    return map;
+  }
+
+  function cloneSlotsArray(slots = []) {
+    return slots.map(cloneSlot);
+  }
+
+  function cloneSlot(slot) {
+    return {
+      class_id: slot.class_id,
+      tag: slot.tag,
+      stunde: slot.stunde,
+      subject_id: slot.subject_id,
+      teacher_id: slot.teacher_id,
+    };
+  }
+
+  function getSlotKey(classId, tag, stunde) {
+    return `${tag}|${stunde}|${classId}`;
+  }
+
+  function getCanonicalSubjectId(subjectId) {
+    const subject = state.subjects.get(subjectId);
+    return subject?.alias_subject_id || subjectId;
+  }
+
+  function isBandSubject(subjectId) {
+    const subject = state.subjects.get(subjectId);
+    return Boolean(subject?.is_bandfach);
+  }
+
+  function renderEditingSection() {
+    editingSection.innerHTML = '';
+    if (!state.editing) {
+      editingSection.classList.add('hidden');
+      return;
+    }
+    editingSection.classList.remove('hidden');
+
+    const header = document.createElement('div');
+    header.className = 'flex flex-wrap items-center justify-between gap-3';
+    const title = document.createElement('h2');
+    title.className = 'text-lg font-semibold';
+    title.textContent = `Plan bearbeiten: ${state.editing.planName}`;
+
+    const controls = document.createElement('div');
+    controls.className = 'flex flex-wrap items-center gap-2';
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-primary btn-sm';
+    saveBtn.textContent = 'Änderungen speichern';
+    saveBtn.disabled = state.editing.parking.length > 0 || !state.editing.dirty;
+    saveBtn.addEventListener('click', handleSaveEditing);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'btn btn-outline btn-sm';
+    resetBtn.textContent = 'Auf Ursprung zurücksetzen';
+    resetBtn.disabled = !state.editing.dirty && state.editing.parking.length === 0;
+    resetBtn.addEventListener('click', resetEditingPlan);
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-ghost btn-sm';
+    cancelBtn.textContent = 'Bearbeitung beenden';
+    cancelBtn.addEventListener('click', cancelEditingPlan);
+
+    controls.append(saveBtn, resetBtn, cancelBtn);
+    header.append(title, controls);
+    editingSection.appendChild(header);
+
+    const helper = document.createElement('p');
+    helper.className = 'text-xs opacity-70';
+    helper.textContent = 'Ziehen, um Slots zu verschieben. Lehrkräfte dürfen nicht doppelt belegt werden (außer bei Bandfächern).';
+    editingSection.appendChild(helper);
+
+    editingSection.appendChild(renderTeacherHighlightControls());
+
+    const layout = document.createElement('div');
+    layout.className = 'grid gap-6 xl:grid-cols-[minmax(720px,1fr)_300px]';
+    layout.appendChild(renderEditingGrid());
+    layout.appendChild(renderEditingPalette());
+    editingSection.appendChild(layout);
+  }
+
+  function renderTeacherHighlightControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'flex flex-wrap items-center gap-2 text-xs';
+
+    const label = document.createElement('span');
+    label.className = 'font-semibold uppercase tracking-wide';
+    label.textContent = 'Lehrkraft hervorheben:';
+    wrap.appendChild(label);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = `btn btn-xs ${state.highlightedTeacherId == null ? 'btn-active btn-outline' : 'btn-outline'}`;
+    clearBtn.textContent = 'Alle';
+    clearBtn.addEventListener('click', () => toggleHighlightedTeacher(null));
+    wrap.appendChild(clearBtn);
+
+    const teacherEntries = Array.from(state.teachers.entries()).sort(([, a], [, b]) => {
+      const nameA = (a.kuerzel || a.name || '').toLowerCase();
+      const nameB = (b.kuerzel || b.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    teacherEntries.forEach(([id, teacher]) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const isActive = isTeacherHighlighted(id);
+      btn.className = `btn btn-xs ${isActive ? 'btn-primary' : 'btn-outline'}`;
+      btn.textContent = teacher.kuerzel || teacher.name || `#${id}`;
+      btn.addEventListener('click', () => toggleHighlightedTeacher(id));
+      wrap.appendChild(btn);
+    });
+
+    return wrap;
+  }
+
+  function renderEditingGrid() {
+    const card = document.createElement('article');
+    card.className = 'card bg-base-100 border border-base-200 shadow-sm';
+    const body = document.createElement('div');
+    body.className = 'card-body space-y-4';
+
+    const table = document.createElement('table');
+    table.className = 'w-full border-collapse text-sm select-none';
+
+    const thead = document.createElement('thead');
+    const dayRow = document.createElement('tr');
+    const timeHeader = document.createElement('th');
+    timeHeader.rowSpan = 2;
+    timeHeader.className = 'bg-base-200 text-left uppercase text-xs tracking-wide px-4 py-3 border border-base-300 min-w-[90px]';
+    timeHeader.textContent = 'Zeit';
+    dayRow.appendChild(timeHeader);
+
+    const orderedClassIds = Array.from(state.classes.keys()).sort((a, b) => getClassName(state.classes, a).localeCompare(getClassName(state.classes, b)));
+
+    DAYS.forEach(day => {
+      const th = document.createElement('th');
+      th.colSpan = orderedClassIds.length;
+      th.className = 'bg-base-200 text-center text-sm font-semibold px-4 py-3 border border-base-300';
+      th.textContent = DAY_LABELS[day] || day;
+      dayRow.appendChild(th);
+    });
+    thead.appendChild(dayRow);
+
+    const classRow = document.createElement('tr');
+    DAYS.forEach((day, dayIdx) => {
+      orderedClassIds.forEach(classId => {
+        const th = document.createElement('th');
+        const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/60';
+        th.className = `${stripe} text-center text-xs font-medium px-3 py-2 border border-base-300`;
+        th.textContent = getClassName(state.classes, classId);
+        classRow.appendChild(th);
+      });
+    });
+    thead.appendChild(classRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    STUNDEN.forEach(period => {
+      const tr = document.createElement('tr');
+      const periodCell = document.createElement('th');
+      periodCell.className = 'bg-base-100 px-3 py-4 text-left text-xs font-semibold border border-base-300';
+      periodCell.textContent = `${period}. Stunde`;
+      tr.appendChild(periodCell);
+
+      DAYS.forEach((day, dayIdx) => {
+        orderedClassIds.forEach(classId => {
+          const key = getSlotKey(classId, day, period - 1);
+          const slot = state.editing.slotsMap.get(key) || null;
+          const td = document.createElement('td');
+          const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/40';
+          td.className = `align-top p-1.5 border border-base-200 ${stripe} min-w-[150px]`;
+          td.dataset.classId = String(classId);
+          td.dataset.tag = day;
+          td.dataset.stunde = String(period - 1);
+          td.addEventListener('dragover', handleCellDragOver);
+          td.addEventListener('dragleave', handleCellDragLeave);
+          td.addEventListener('drop', handleCellDrop);
+
+          td.appendChild(renderEditingSlot(slot, key));
+          tr.appendChild(td);
+        });
+      });
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    body.appendChild(table);
+    card.appendChild(body);
+    return card;
+  }
+
+  function renderEditingSlot(slot, slotKey) {
+    const wrapper = document.createElement('div');
+    if (!slot) {
+      wrapper.className = 'h-full min-h-[72px] rounded-lg border border-dashed border-base-300 bg-base-200/40 flex flex-col justify-center items-center text-[11px] text-base-content/60';
+      wrapper.textContent = 'frei';
+      return wrapper;
+    }
+
+    const subject = state.subjects.get(slot.subject_id);
+    const teacher = state.teachers.get(slot.teacher_id);
+    wrapper.className = 'h-full min-h-[72px] rounded-lg border border-base-300 bg-base-100 px-2.5 py-2 flex flex-col gap-1 shadow-sm cursor-grab active:cursor-grabbing';
+    wrapper.draggable = true;
+    wrapper.dataset.slotKey = slotKey;
+    wrapper.addEventListener('dragstart', event => handleSlotDragStart(event, slot));
+    wrapper.addEventListener('dragend', handleSlotDragEnd);
+
+    if (subject?.color) {
+      const bg = colorToRgba(subject.color, 0.25);
+      const border = colorToRgba(subject.color, 0.6) || subject.color;
+      if (bg) wrapper.style.backgroundColor = bg;
+      if (border) wrapper.style.borderColor = border;
+    }
+
+    const subjectLine = document.createElement('div');
+    subjectLine.className = 'font-semibold text-xs uppercase tracking-wide text-base-content';
+    subjectLine.textContent = subject?.kuerzel || subject?.name || `Fach #${slot.subject_id}`;
+    wrapper.appendChild(subjectLine);
+
+    if (teacher) {
+      const teacherLine = document.createElement('div');
+      teacherLine.className = 'text-[11px] opacity-80';
+      teacherLine.textContent = teacher.kuerzel || teacher.name || '';
+      if (teacherLine.textContent) wrapper.appendChild(teacherLine);
+    }
+
+    if (isBandSubject(slot.subject_id)) {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-xs badge-outline badge-primary';
+      badge.textContent = 'Band';
+      const meta = document.createElement('div');
+      meta.className = 'flex items-center gap-1 mt-auto';
+      meta.appendChild(badge);
+      wrapper.appendChild(meta);
+    }
+
+    if (isTeacherHighlighted(slot.teacher_id)) {
+      wrapper.classList.add('ring', 'ring-primary', 'ring-offset-2');
+    }
+
+    return wrapper;
+  }
+
+  function renderEditingPalette() {
+    const card = document.createElement('article');
+    card.className = 'card bg-base-100 border border-dashed border-base-300 shadow-sm h-full';
+    const body = document.createElement('div');
+    body.className = 'card-body space-y-3';
+
+    const header = document.createElement('div');
+    header.className = 'flex items-center justify-between gap-2';
+    const title = document.createElement('h3');
+    title.className = 'text-sm font-semibold uppercase tracking-wide';
+    title.textContent = 'Zwischenablage';
+    header.appendChild(title);
+    body.appendChild(header);
+
+    const dropZone = document.createElement('div');
+    dropZone.className = 'space-y-2 min-h-[80px] border border-dashed border-base-300 rounded-lg p-3 bg-base-200/30';
+    dropZone.addEventListener('dragover', handlePaletteDragOver);
+    dropZone.addEventListener('dragleave', handlePaletteDragLeave);
+    dropZone.addEventListener('drop', handlePaletteDrop);
+
+    if (!state.editing.parking.length) {
+      const empty = document.createElement('p');
+      empty.className = 'text-xs opacity-60 text-center';
+      empty.textContent = 'Keine Fächer abgelegt.';
+      dropZone.appendChild(empty);
+    } else {
+      state.editing.parking.forEach(item => {
+        dropZone.appendChild(renderPaletteItem(item));
+      });
+    }
+
+    body.appendChild(dropZone);
+    card.appendChild(body);
+    return card;
+  }
+
+  function renderPaletteItem(item) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rounded-lg border border-base-300 bg-base-100 px-3 py-2 shadow-sm cursor-grab active:cursor-grabbing';
+    wrapper.draggable = true;
+    wrapper.dataset.paletteId = item.id;
+    wrapper.addEventListener('dragstart', event => handlePaletteDragStart(event, item));
+    wrapper.addEventListener('dragend', handleSlotDragEnd);
+
+    const subject = state.subjects.get(item.subjectId);
+    const teacher = state.teachers.get(item.teacherId);
+    if (subject?.color) {
+      const bg = colorToRgba(subject.color, 0.25);
+      const border = colorToRgba(subject.color, 0.6) || subject.color;
+      if (bg) wrapper.style.backgroundColor = bg;
+      if (border) wrapper.style.borderColor = border;
+    }
+
+    const title = document.createElement('div');
+    title.className = 'flex items-center justify-between gap-2';
+    const label = document.createElement('span');
+    label.className = 'font-semibold text-xs uppercase tracking-wide';
+    label.textContent = subject?.kuerzel || subject?.name || `Fach #${item.subjectId}`;
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-xs badge-outline';
+    badge.textContent = item.type === 'band' ? 'Band' : 'Slot';
+    title.append(label, badge);
+    wrapper.appendChild(title);
+
+    if (teacher) {
+      const teacherLine = document.createElement('div');
+      teacherLine.className = 'text-[11px] opacity-80';
+      teacherLine.textContent = teacher.kuerzel || teacher.name || '';
+      wrapper.appendChild(teacherLine);
+    }
+
+    const classesLine = document.createElement('div');
+    classesLine.className = 'text-[10px] opacity-70';
+    const classNames = item.slots.map(slot => getClassName(state.classes, slot.class_id)).join(', ');
+    classesLine.textContent = `Klassen: ${classNames}`;
+    wrapper.appendChild(classesLine);
+
+    const actions = document.createElement('div');
+    actions.className = 'flex justify-end mt-1';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-xs btn-ghost text-error';
+    removeBtn.textContent = 'Entfernen';
+    removeBtn.addEventListener('click', () => removePaletteItem(item.id));
+    actions.appendChild(removeBtn);
+    wrapper.appendChild(actions);
+
+    if (isTeacherHighlighted(item.teacherId)) {
+      wrapper.classList.add('ring', 'ring-primary', 'ring-offset-2');
+    }
+    return wrapper;
+  }
+
+  function removePaletteItem(id, options = {}) {
+    if (!state.editing) return;
+    state.editing.parking = state.editing.parking.filter(item => item.id !== id);
+    setEditingDirty(true);
+    if (!options.silent) {
+      renderResults();
+    }
+  }
+
+  function handleSlotDragStart(event, slot) {
+    if (!state.editing) return;
+    const payload = createDragPayloadFromGrid(slot);
+    if (!payload) {
+      event.preventDefault();
+      return;
+    }
+    state.dragPayload = { source: 'grid', data: payload };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', 'slot');
+  }
+
+  function handleSlotDragEnd() {
+    state.dragPayload = null;
+  }
+
+  function handleCellDragOver(event) {
+    if (!state.dragPayload) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    event.currentTarget.classList.add('outline', 'outline-primary');
+  }
+
+  function handleCellDragLeave(event) {
+    event.currentTarget.classList.remove('outline', 'outline-primary');
+  }
+
+  function handleCellDrop(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('outline', 'outline-primary');
+    if (!state.dragPayload) return;
+    const classId = Number(event.currentTarget.dataset.classId);
+    const tag = event.currentTarget.dataset.tag;
+    const stunde = Number(event.currentTarget.dataset.stunde);
+    if (applyDropToCell(classId, tag, stunde)) {
+      state.dragPayload = null;
+      renderResults();
+    }
+  }
+
+  function handlePaletteDragOver(event) {
+    if (!state.dragPayload) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    event.currentTarget.classList.add('outline', 'outline-primary');
+  }
+
+  function handlePaletteDragLeave(event) {
+    event.currentTarget.classList.remove('outline', 'outline-primary');
+  }
+
+  function handlePaletteDrop(event) {
+    event.preventDefault();
+    event.currentTarget.classList.remove('outline', 'outline-primary');
+    if (!state.dragPayload) return;
+    if (moveSlotToPalette()) {
+      state.dragPayload = null;
+      renderResults();
+    }
+  }
+
+  function handlePaletteDragStart(event, item) {
+    state.dragPayload = { source: 'palette', data: cloneParkingItem(item) };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', 'palette-slot');
+  }
+
+  function cloneParkingItem(item) {
+    return {
+      id: item.id,
+      type: item.type,
+      subjectId: item.subjectId,
+      teacherId: item.teacherId,
+      canonicalSubjectId: item.canonicalSubjectId,
+      slots: item.slots.map(cloneSlot),
+      originKeys: new Set(),
+    };
+  }
+
+  function createDragPayloadFromGrid(slot) {
+    if (!state.editing) return null;
+    const key = getSlotKey(slot.class_id, slot.tag, slot.stunde);
+    const existing = state.editing.slotsMap.get(key);
+    if (!existing) return null;
+    if (isBandSubject(existing.subject_id)) {
+      const canonicalId = getCanonicalSubjectId(existing.subject_id);
+      const slots = [];
+      state.editing.slotsMap.forEach(value => {
+        if (!value) return;
+        if (value.tag !== slot.tag || value.stunde !== slot.stunde) return;
+        if (value.teacher_id !== existing.teacher_id) return;
+        if (getCanonicalSubjectId(value.subject_id) !== canonicalId) return;
+        slots.push(cloneSlot(value));
+      });
+      return {
+        type: 'band',
+        subjectId: existing.subject_id,
+        teacherId: existing.teacher_id,
+        canonicalSubjectId: canonicalId,
+        slots,
+        originKeys: new Set(slots.map(s => getSlotKey(s.class_id, s.tag, s.stunde))),
+      };
+    }
+    return {
+      type: 'single',
+      subjectId: existing.subject_id,
+      teacherId: existing.teacher_id,
+      canonicalSubjectId: getCanonicalSubjectId(existing.subject_id),
+      slots: [cloneSlot(existing)],
+      originKeys: new Set([key]),
+    };
+  }
+
+  function applyDropToCell(targetClassId, targetTag, targetStunde) {
+    if (!state.editing || !state.dragPayload) return false;
+    const payload = state.dragPayload.data;
+    const fromPalette = state.dragPayload.source === 'palette';
+
+    const targetKey = getSlotKey(targetClassId, targetTag, targetStunde);
+    const occupant = state.editing.slotsMap.get(targetKey);
+    if (occupant) {
+      statusBar.set('Slot ist belegt. Bitte zuerst freimachen.', true);
+      return false;
+    }
+
+    let slotsToPlace = [];
+    if (payload.type === 'single') {
+      const baseSlot = payload.slots[0];
+      if (baseSlot.class_id !== targetClassId) {
+        statusBar.set('Fach gehört zu einer anderen Klasse.', true);
+        return false;
+      }
+      const newSlot = cloneSlot(baseSlot);
+      newSlot.class_id = targetClassId;
+      newSlot.tag = targetTag;
+      newSlot.stunde = targetStunde;
+      slotsToPlace = [newSlot];
+    } else {
+      const classIds = payload.slots.map(s => s.class_id);
+      if (!classIds.includes(targetClassId)) {
+        statusBar.set('Bandfach kann nur auf eine der beteiligten Klassen gezogen werden.', true);
+        return false;
+      }
+      slotsToPlace = payload.slots.map(s => {
+        const clone = cloneSlot(s);
+        clone.tag = targetTag;
+        clone.stunde = targetStunde;
+        return clone;
+      });
+    }
+
+    const skipKeys = new Set(payload.originKeys || []);
+    if (!canPlaceSlots(slotsToPlace, skipKeys)) {
+      statusBar.set('Lehrkraft ist bereits belegt.', true);
+      return false;
+    }
+
+    if (!fromPalette) {
+      (payload.originKeys || []).forEach(key => {
+        state.editing.slotsMap.set(key, null);
+      });
+    } else if (payload.id) {
+      removePaletteItem(payload.id, { silent: true });
+    }
+
+    slotsToPlace.forEach(slot => {
+      const key = getSlotKey(slot.class_id, slot.tag, slot.stunde);
+      state.editing.slotsMap.set(key, cloneSlot(slot));
+    });
+
+    setEditingDirty(true);
+    return true;
+  }
+
+  function moveSlotToPalette() {
+    if (!state.editing || !state.dragPayload) return false;
+    if (state.dragPayload.source !== 'grid') return false;
+    const payload = state.dragPayload.data;
+    const item = {
+      id: `parking-${++state.editingParkingSeq}`,
+      type: payload.type,
+      subjectId: payload.subjectId,
+      teacherId: payload.teacherId,
+      canonicalSubjectId: payload.canonicalSubjectId,
+      slots: payload.slots.map(cloneSlot),
+    };
+
+    (payload.originKeys || []).forEach(key => {
+      state.editing.slotsMap.set(key, null);
+    });
+    state.editing.parking.push(item);
+    setEditingDirty(true);
+    return true;
+  }
+
+  function canPlaceSlots(slots, skipKeys = new Set()) {
+    for (const slot of slots) {
+      const key = getSlotKey(slot.class_id, slot.tag, slot.stunde);
+      const occupant = state.editing.slotsMap.get(key);
+      if (occupant && !skipKeys.has(key)) {
+        return false;
+      }
+    }
+
+    for (const slot of slots) {
+      const teacherId = slot.teacher_id;
+      if (!teacherId) continue;
+      const canonicalId = getCanonicalSubjectId(slot.subject_id);
+      for (const [key, value] of state.editing.slotsMap.entries()) {
+        if (!value) continue;
+        if (skipKeys.has(key)) continue;
+        if (value.tag !== slot.tag || value.stunde !== slot.stunde) continue;
+        if (value.teacher_id !== teacherId) continue;
+        const otherCanonical = getCanonicalSubjectId(value.subject_id);
+        if (canonicalId !== otherCanonical) {
+          return false;
+        }
+      }
+      for (const other of slots) {
+        if (other === slot) continue;
+        if (other.tag === slot.tag && other.stunde === slot.stunde && other.teacher_id === teacherId) {
+          const otherCanonical = getCanonicalSubjectId(other.subject_id);
+          if (canonicalId !== otherCanonical) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  async function handleSaveEditing() {
+    if (!state.editing) return;
+    if (state.editing.parking.length) {
+      statusBar.set('Bitte zuerst alle Fächer aus der Zwischenablage positionieren.', true);
+      return;
+    }
+    const slots = [];
+    state.editing.slotsMap.forEach(value => {
+      if (!value) return;
+      slots.push(cloneSlot(value));
+    });
+    slots.sort((a, b) => {
+      if (a.tag === b.tag) {
+        if (a.stunde === b.stunde) {
+          return a.class_id - b.class_id;
+        }
+        return a.stunde - b.stunde;
+      }
+      return a.tag.localeCompare(b.tag);
+    });
+    try {
+      statusBar.set('Speichere bearbeiteten Plan…');
+      const detail = await updatePlanSlots(state.editing.planId, slots);
+      state.editing.slotsOriginal = cloneSlotsArray(detail.slots || []);
+      state.editing.slotsMap = buildSlotsMapFromArray(detail.slots || []);
+      state.editing.parking = [];
+      state.editing.dirty = false;
+
+      state.generatedPlans = state.generatedPlans.map(entry =>
+        entry.id === detail.id
+          ? { ...entry, slots: cloneSlotsArray(detail.slots || []), name: detail.name, comment: detail.comment }
+          : entry
+      );
+      if (state.lastPlanId === detail.id) {
+        state.planName = detail.name || state.planName;
+        state.planComment = detail.comment || state.planComment;
+      }
+      statusBar.set('Plan gespeichert.');
+      setTimeout(statusBar.clear, 1500);
+      renderResults();
+    } catch (err) {
+      statusBar.set(`Speichern fehlgeschlagen: ${formatError(err)}`, true);
+    }
   }
 
   function renderActiveRuleBadges(planEntry) {
@@ -1599,8 +2324,26 @@ export function createPlanView() {
 
     return wrap;
   }
-  function getClassName(classId) {
+  function getClassName(arg1, arg2) {
+    if (arg2 !== undefined) {
+      const classesMap = arg1 instanceof Map ? arg1 : state.classes;
+      const classId = arg2;
+      return classesMap.get(classId)?.name || `Klasse #${classId}`;
+    }
+    const classId = arg1;
     return state.classes.get(classId)?.name || `Klasse #${classId}`;
+  }
+
+  function colorToRgba(hex, alpha) {
+    if (typeof hex !== 'string') return null;
+    const cleaned = hex.trim().replace('#', '');
+    if (cleaned.length !== 6) return null;
+    const num = Number.parseInt(cleaned, 16);
+    if (Number.isNaN(num)) return null;
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   return container;

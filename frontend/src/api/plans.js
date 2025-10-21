@@ -58,6 +58,16 @@ export async function updatePlan(planId, payload) {
   return res.json();
 }
 
+export async function updatePlanSlots(planId, slots) {
+  const res = await fetch(`/plans/${planId}/slots`, {
+    method: 'PUT',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ slots }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function deletePlan(planId) {
   const res = await fetch(`/plans/${planId}`, {
     method: 'DELETE',

@@ -13,6 +13,7 @@ export function createPlanGrid({
   subjects = new Map(),
   teachers = new Map(),
   visibleClasses,
+  highlightedTeacherId = null,
 }) {
   const classIds = Array.from(visibleClasses && visibleClasses.size ? visibleClasses : classes.keys());
   if (!classIds.length) {
@@ -80,7 +81,7 @@ export function createPlanGrid({
         const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/40';
         td.className = `align-top p-1.5 border border-base-200 ${stripe} min-w-[150px]`;
         const slot = slotMap.get(`${day}-${classId}-${period}`);
-        td.appendChild(renderSlotCard(slot, { subjects, teachers }));
+        td.appendChild(renderSlotCard(slot, { subjects, teachers, highlightedTeacherId }));
         tr.appendChild(td);
       });
     });
@@ -96,7 +97,7 @@ export function createPlanGrid({
   return wrapper;
 }
 
-function renderSlotCard(slot, { subjects, teachers }) {
+function renderSlotCard(slot, { subjects, teachers, highlightedTeacherId }) {
   const card = document.createElement('div');
   card.className = 'h-full min-h-[72px] rounded-lg border border-dashed border-base-300 bg-base-200/40 flex flex-col justify-center items-center text-[11px] text-base-content/60';
 
@@ -145,6 +146,11 @@ function renderSlotCard(slot, { subjects, teachers }) {
       markers.appendChild(badge);
     }
     if (markers.childElementCount) card.appendChild(markers);
+  }
+
+  const teacherId = teacher?.id ?? slot.teacher_id;
+  if (highlightedTeacherId != null && teacherId != null && Number(teacherId) === Number(highlightedTeacherId)) {
+    card.classList.add('ring', 'ring-primary', 'ring-offset-2');
   }
 
   return card;

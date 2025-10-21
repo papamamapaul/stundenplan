@@ -12,7 +12,16 @@ from sqlalchemy import delete, text
 
 from ..database import get_session
 from ..models import Class, Plan, PlanSlot, RuleProfile, Subject, Teacher, BasisPlan
-from ..schemas import GenerateParams, GenerateRequest, GenerateResponse, PlanDetail, PlanSlotOut, PlanSummary, PlanUpdateRequest
+from ..schemas import (
+    GenerateParams,
+    GenerateRequest,
+    GenerateResponse,
+    PlanDetail,
+    PlanSlotOut,
+    PlanSlotsUpdateRequest,
+    PlanSummary,
+    PlanUpdateRequest,
+)
 from ..services.solver_service import (
     _rules_to_dict,
     fetch_requirements_dataframe,
@@ -928,6 +937,34 @@ def update_plan_metadata(plan_id: int, payload: PlanUpdateRequest, session: Sess
     session.commit()
     session.refresh(plan)
     return plan
+
+
+@router.put("/{plan_id}/slots", response_model=PlanDetail)
+def replace_plan_slots(plan_id: int, payload: PlanSlotsUpdateRequest, session: Session = Depends(get_session)) -> PlanDetail:
+    _ensure_plan_metadata_columns(session)
+    plan = session.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+
+    # remove existing slots
+    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id))
+    session.commit()
+
+    for slot in payload.slots:
+        session.add(
+            PlanSlot(
+                plan_id=plan_id,
+                class_id=slot.class_id,
+                tag=slot.tag,
+                stunde=slot.stunde,
+                subject_id=slot.subject_id,
+                teacher_id=slot.teacher_id,
+            )
+        )
+
+    session.commit()
+
+    return get_plan(plan_id, session)
 
 
 @router.delete("/{plan_id}", status_code=204)
