@@ -39,10 +39,14 @@ def _rules_to_dict(rule_profile: Dict[str, int | bool] | None) -> Dict[str, int 
     return dict(rule_profile)
 
 
-def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = None) -> Tuple[pd.DataFrame, List[int], List[str], List[str], Dict[int, Dict[str, bool]]]:
+def fetch_requirements_dataframe(
+    session: Session,
+    account_id: int,
+    version_id: Optional[int] = None,
+) -> Tuple[pd.DataFrame, List[int], List[str], List[str], Dict[int, Dict[str, bool]]]:
     _ensure_solver_schema(session)
     # Holt Requirements + Namen und baut das Erwartungs-DF
-    stmt = select(Requirement)
+    stmt = select(Requirement).where(Requirement.account_id == account_id)
     if version_id is not None:
         stmt = stmt.where(Requirement.version_id == version_id)
     reqs = session.exec(stmt).all()
@@ -50,9 +54,9 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
         return pd.DataFrame(), [], [], []
 
     # Name-Lookups
-    subject_rows = session.exec(select(Subject)).all()
-    room_rows = session.exec(select(Room)).all()
-    teacher_rows = session.exec(select(Teacher)).all()
+    subject_rows = session.exec(select(Subject).where(Subject.account_id == account_id)).all()
+    room_rows = session.exec(select(Room).where(Room.account_id == account_id)).all()
+    teacher_rows = session.exec(select(Teacher).where(Teacher.account_id == account_id)).all()
     subjects = {s.id: s.name for s in subject_rows}
     subject_room = {s.id: s.required_room_id for s in subject_rows}
     rooms = {r.id: r.name for r in room_rows}
@@ -70,7 +74,7 @@ def fetch_requirements_dataframe(session: Session, version_id: Optional[int] = N
         }
         for t in teacher_rows
     }
-    classes = {c.id: c.name for c in session.exec(select(Class)).all()}
+    classes = {c.id: c.name for c in session.exec(select(Class).where(Class.account_id == account_id)).all()}
 
     def _canonical_subject_id(subject_id: int) -> int:
         seen = set()

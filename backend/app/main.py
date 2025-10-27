@@ -19,11 +19,14 @@ def on_startup() -> None:
     from sqlmodel import Session, select
     from .database import engine
     from .models import RuleProfile
+    from .services.accounts import ensure_default_account, ensure_default_admin
 
     with Session(engine) as session:
-        existing = session.exec(select(RuleProfile)).first()
+        account = ensure_default_account(session)
+        ensure_default_admin(session, account)
+        existing = session.exec(select(RuleProfile).where(RuleProfile.account_id == account.id)).first()
         if not existing:
-            default = RuleProfile(name="Default")
+            default = RuleProfile(name="Default", account_id=account.id)
             session.add(default)
             session.commit()
 

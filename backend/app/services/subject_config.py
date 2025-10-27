@@ -56,13 +56,17 @@ def resolve_participation(class_subject: Optional[ClassSubject]) -> RequirementP
     return RequirementParticipationEnum.curriculum
 
 
-def sync_requirements_for_class_subject(session: Session, class_id: int, subject_id: int) -> int:
+def sync_requirements_for_class_subject(session: Session, account_id: int, class_id: int, subject_id: int) -> int:
     """Apply the current class-subject configuration to all matching requirements.
 
     Returns the number of updated requirements.
     """
     class_subject = session.exec(
-        select(ClassSubject).where(ClassSubject.class_id == class_id, ClassSubject.subject_id == subject_id)
+        select(ClassSubject).where(
+            ClassSubject.account_id == account_id,
+            ClassSubject.class_id == class_id,
+            ClassSubject.subject_id == subject_id,
+        )
     ).first()
     doppel = resolve_doppelstunde(session, subject_id, class_subject)
     nachmittag = resolve_nachmittag(session, subject_id, class_subject)
@@ -70,6 +74,7 @@ def sync_requirements_for_class_subject(session: Session, class_id: int, subject
 
     updated = 0
     requirement_stmt = select(Requirement).where(
+        Requirement.account_id == account_id,
         Requirement.class_id == class_id,
         Requirement.subject_id == subject_id,
     )
@@ -92,6 +97,7 @@ def apply_subject_defaults(session: Session, requirement: Requirement) -> Requir
     """Apply subject/class defaults to a requirement and mark it as subject-config driven."""
     class_subject = session.exec(
         select(ClassSubject).where(
+            ClassSubject.account_id == requirement.account_id,
             ClassSubject.class_id == requirement.class_id,
             ClassSubject.subject_id == requirement.subject_id,
         )

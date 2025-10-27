@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from ..database import get_session
 from ..models import BasisPlan
 from ..schemas import BasisPlanData, BasisPlanOut, BasisPlanUpdate
+from ..services.accounts import resolve_account
 
 
 router = APIRouter(prefix="/basisplan", tags=["basisplan"])
@@ -33,10 +34,10 @@ def _load_data(row: BasisPlan) -> BasisPlanData:
     return BasisPlanData(**raw)
 
 
-def _ensure_row(session: Session) -> BasisPlan:
-    row = session.exec(select(BasisPlan)).first()
+def _ensure_row(session: Session, account_id: int) -> BasisPlan:
+    row = session.exec(select(BasisPlan).where(BasisPlan.account_id == account_id)).first()
     if not row:
-        row = BasisPlan(name="Basisplan", data=None)
+        row = BasisPlan(name="Basisplan", data=None, account_id=account_id)
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -44,15 +45,24 @@ def _ensure_row(session: Session) -> BasisPlan:
 
 
 @router.get("", response_model=BasisPlanOut)
-def get_basisplan(session: Session = Depends(get_session)) -> BasisPlanOut:
-    row = _ensure_row(session)
+def get_basisplan(
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> BasisPlanOut:
+    account = resolve_account(session, account_id)
+    row = _ensure_row(session, account.id)
     data = _load_data(row)
     return BasisPlanOut(id=row.id, name=row.name, data=data, updated_at=row.updated_at)
 
 
 @router.put("", response_model=BasisPlanOut)
-def update_basisplan(payload: BasisPlanUpdate, session: Session = Depends(get_session)) -> BasisPlanOut:
-    row = _ensure_row(session)
+def update_basisplan(
+    payload: BasisPlanUpdate,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> BasisPlanOut:
+    account = resolve_account(session, account_id)
+    row = _ensure_row(session, account.id)
     if payload.name:
         row.name = payload.name
     if payload.data is not None:

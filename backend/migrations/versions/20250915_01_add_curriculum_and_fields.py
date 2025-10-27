@@ -52,6 +52,18 @@ def upgrade() -> None:
             sa.Column('kuerzel', sa.String(), nullable=True),
         )
 
+    def ensure_table_room():
+        if 'room' in inspector.get_table_names():
+            return
+        op.create_table(
+            'room',
+            sa.Column('id', sa.Integer(), primary_key=True),
+            sa.Column('name', sa.String(), nullable=False, unique=True),
+            sa.Column('type', sa.String(), nullable=True),
+            sa.Column('capacity', sa.Integer(), nullable=True),
+            sa.Column('is_classroom', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+        )
+
     def ensure_table_ruleprofile():
         if 'ruleprofile' in inspector.get_table_names():
             return
@@ -135,6 +147,7 @@ def upgrade() -> None:
     ensure_table_teacher()
     ensure_table_class()
     ensure_table_subject()
+    ensure_table_room()
     ensure_table_ruleprofile()
     ensure_table_plan()
     ensure_table_requirement()
@@ -149,6 +162,7 @@ def downgrade() -> None:
     op.drop_table('requirement')
     op.drop_table('plan')
     op.drop_table('ruleprofile')
+    op.drop_table('room')
     op.drop_table('subject')
     op.drop_table('class')
     op.drop_table('teacher')

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 from sqlalchemy import text
 
 from ..database import get_session
 from ..models import Class, Subject, Teacher, Room, Requirement, PlanSlot, ClassSubject
+from ..services.accounts import resolve_account
 from ..services.subject_config import sync_requirements_for_subject
 
 
@@ -23,12 +24,21 @@ def _ensure_subject_alias_column(session: Session) -> None:
 
 
 @router.get("/teachers", response_model=List[Teacher])
-def list_teachers(session: Session = Depends(get_session)) -> List[Teacher]:
-    return session.exec(select(Teacher)).all()
+def list_teachers(
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> List[Teacher]:
+    account = resolve_account(session, account_id)
+    return session.exec(select(Teacher).where(Teacher.account_id == account.id)).all()
 
 
 @router.post("/teachers", response_model=Teacher)
-def create_teacher(payload: Teacher, session: Session = Depends(get_session)) -> Teacher:
+def create_teacher(
+    payload: Teacher,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Teacher:
+    account = resolve_account(session, account_id)
     # Mandatory: kuerzel and deputat
     if not payload.kuerzel or (payload.deputat is None):
         raise HTTPException(status_code=400, detail="kuerzel and deputat are required")
@@ -40,6 +50,7 @@ def create_teacher(payload: Teacher, session: Session = Depends(get_session)) ->
         else:
             payload.name = str(payload.kuerzel)
     t = Teacher(
+        account_id=account.id,
         name=payload.name,
         kuerzel=payload.kuerzel,
         deputat_soll=payload.deputat_soll,
@@ -59,10 +70,18 @@ def create_teacher(payload: Teacher, session: Session = Depends(get_session)) ->
 
 
 @router.put("/teachers/{teacher_id}", response_model=Teacher)
-def update_teacher(teacher_id: int, payload: Teacher, session: Session = Depends(get_session)) -> Teacher:
+def update_teacher(
+    teacher_id: int,
+    payload: Teacher,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Teacher:
+    account = resolve_account(session, account_id)
     t = session.get(Teacher, teacher_id)
     if not t:
         raise HTTPException(status_code=404, detail="teacher not found")
+    if t.account_id != account.id:
+        raise HTTPException(status_code=403, detail="teacher belongs to different account")
     if payload.name:
         t.name = payload.name
     if payload.first_name is not None:
@@ -102,18 +121,31 @@ def update_teacher(teacher_id: int, payload: Teacher, session: Session = Depends
 
 
 @router.delete("/teachers/{teacher_id}")
-def delete_teacher(teacher_id: int, session: Session = Depends(get_session)) -> dict:
+def delete_teacher(
+    teacher_id: int,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> dict:
+    account = resolve_account(session, account_id)
     t = session.get(Teacher, teacher_id)
     if not t:
         raise HTTPException(status_code=404, detail="teacher not found")
+    if t.account_id != account.id:
+        raise HTTPException(status_code=403, detail="teacher belongs to different account")
     dependencies = []
-    has_homeroom = session.exec(select(Class.id).where(Class.homeroom_teacher_id == teacher_id).limit(1)).first()
+    has_homeroom = session.exec(
+        select(Class.id).where(Class.account_id == account.id, Class.homeroom_teacher_id == teacher_id).limit(1)
+    ).first()
     if has_homeroom:
         dependencies.append("Klassen (Klassenleitung)")
-    has_requirements = session.exec(select(Requirement.id).where(Requirement.teacher_id == teacher_id).limit(1)).first()
+    has_requirements = session.exec(
+        select(Requirement.id).where(Requirement.account_id == account.id, Requirement.teacher_id == teacher_id).limit(1)
+    ).first()
     if has_requirements:
         dependencies.append("Zuordnungen (Requirements)")
-    has_plan_slots = session.exec(select(PlanSlot.id).where(PlanSlot.teacher_id == teacher_id).limit(1)).first()
+    has_plan_slots = session.exec(
+        select(PlanSlot.id).where(PlanSlot.account_id == account.id, PlanSlot.teacher_id == teacher_id).limit(1)
+    ).first()
     if has_plan_slots:
         dependencies.append("Plan-Slots")
     if dependencies:
@@ -125,15 +157,30 @@ def delete_teacher(teacher_id: int, session: Session = Depends(get_session)) -> 
 
 
 @router.get("/classes", response_model=List[Class])
-def list_classes(session: Session = Depends(get_session)) -> List[Class]:
-    return session.exec(select(Class)).all()
+def list_classes(
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> List[Class]:
+    account = resolve_account(session, account_id)
+    return session.exec(select(Class).where(Class.account_id == account.id)).all()
 
 
 @router.post("/classes", response_model=Class)
-def create_class(payload: Class, session: Session = Depends(get_session)) -> Class:
+def create_class(
+    payload: Class,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Class:
+    account = resolve_account(session, account_id)
     if not payload.name:
         raise HTTPException(status_code=400, detail="name required")
-    c = Class(name=payload.name, homeroom_teacher_id=payload.homeroom_teacher_id)
+    homeroom = None
+    if payload.homeroom_teacher_id is not None:
+        teacher = session.get(Teacher, payload.homeroom_teacher_id)
+        if not teacher or teacher.account_id != account.id:
+            raise HTTPException(status_code=400, detail="homeroom teacher invalid for this account")
+        homeroom = teacher.id
+    c = Class(name=payload.name, homeroom_teacher_id=homeroom, account_id=account.id)
     session.add(c)
     session.commit()
     session.refresh(c)
@@ -141,13 +188,24 @@ def create_class(payload: Class, session: Session = Depends(get_session)) -> Cla
 
 
 @router.put("/classes/{class_id}", response_model=Class)
-def update_class(class_id: int, payload: Class, session: Session = Depends(get_session)) -> Class:
+def update_class(
+    class_id: int,
+    payload: Class,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Class:
+    account = resolve_account(session, account_id)
     c = session.get(Class, class_id)
     if not c:
         raise HTTPException(status_code=404, detail="class not found")
+    if c.account_id != account.id:
+        raise HTTPException(status_code=403, detail="class belongs to different account")
     if payload.name:
         c.name = payload.name
     if payload.homeroom_teacher_id is not None:
+        teacher = session.get(Teacher, payload.homeroom_teacher_id)
+        if not teacher or teacher.account_id != account.id:
+            raise HTTPException(status_code=400, detail="homeroom teacher invalid for this account")
         c.homeroom_teacher_id = payload.homeroom_teacher_id
     session.add(c)
     session.commit()
@@ -156,18 +214,37 @@ def update_class(class_id: int, payload: Class, session: Session = Depends(get_s
 
 
 @router.delete("/classes/{class_id}")
-def delete_class(class_id: int, session: Session = Depends(get_session)) -> dict:
+def delete_class(
+    class_id: int,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> dict:
+    account = resolve_account(session, account_id)
     c = session.get(Class, class_id)
     if not c:
         raise HTTPException(status_code=404, detail="class not found")
+    if c.account_id != account.id:
+        raise HTTPException(status_code=403, detail="class belongs to different account")
     dependencies = []
-    has_requirements = session.exec(select(Requirement.id).where(Requirement.class_id == class_id).limit(1)).first()
+    has_requirements = session.exec(
+        select(Requirement.id).where(Requirement.account_id == account.id, Requirement.class_id == class_id).limit(1)
+    ).first()
     if has_requirements:
         dependencies.append("Zuordnungen (Requirements)")
-    has_curriculum = session.exec(select(ClassSubject.id).where(ClassSubject.class_id == class_id).limit(1)).first()
+    has_curriculum = session.exec(
+        select(ClassSubject.id).where(
+            ClassSubject.account_id == account.id,
+            ClassSubject.class_id == class_id,
+        ).limit(1)
+    ).first()
     if has_curriculum:
         dependencies.append("Stundentafel")
-    has_plan_slots = session.exec(select(PlanSlot.id).where(PlanSlot.class_id == class_id).limit(1)).first()
+    has_plan_slots = session.exec(
+        select(PlanSlot.id).where(
+            PlanSlot.account_id == account.id,
+            PlanSlot.class_id == class_id,
+        ).limit(1)
+    ).first()
     if has_plan_slots:
         dependencies.append("Plan-Slots")
     if dependencies:
@@ -179,20 +256,36 @@ def delete_class(class_id: int, session: Session = Depends(get_session)) -> dict
 
 
 @router.get("/subjects", response_model=List[Subject])
-def list_subjects(session: Session = Depends(get_session)) -> List[Subject]:
+def list_subjects(
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> List[Subject]:
     _ensure_subject_alias_column(session)
-    return session.exec(select(Subject)).all()
+    account = resolve_account(session, account_id)
+    return session.exec(select(Subject).where(Subject.account_id == account.id)).all()
 
 
 @router.post("/subjects", response_model=Subject)
-def create_subject(payload: Subject, session: Session = Depends(get_session)) -> Subject:
+def create_subject(
+    payload: Subject,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Subject:
+    account = resolve_account(session, account_id)
     _ensure_subject_alias_column(session)
     if not payload.name:
         raise HTTPException(status_code=400, detail="name required")
     if payload.required_room_id is not None:
-        if payload.required_room_id and not session.get(Room, payload.required_room_id):
-            raise HTTPException(status_code=400, detail="required room not found")
+        if payload.required_room_id:
+            room = session.get(Room, payload.required_room_id)
+            if not room or room.account_id != account.id:
+                raise HTTPException(status_code=400, detail="required room not found")
+    if payload.alias_subject_id is not None:
+        alias = session.get(Subject, payload.alias_subject_id)
+        if not alias or alias.account_id != account.id:
+            raise HTTPException(status_code=400, detail="alias subject not found")
     s = Subject(
+        account_id=account.id,
         name=payload.name,
         kuerzel=payload.kuerzel,
         color=payload.color,
@@ -210,11 +303,19 @@ def create_subject(payload: Subject, session: Session = Depends(get_session)) ->
 
 
 @router.put("/subjects/{subject_id}", response_model=Subject)
-def update_subject(subject_id: int, payload: Subject, session: Session = Depends(get_session)) -> Subject:
+def update_subject(
+    subject_id: int,
+    payload: Subject,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Subject:
     _ensure_subject_alias_column(session)
+    account = resolve_account(session, account_id)
     s = session.get(Subject, subject_id)
     if not s:
         raise HTTPException(status_code=404, detail="subject not found")
+    if s.account_id != account.id:
+        raise HTTPException(status_code=403, detail="subject belongs to different account")
     needs_sync = False
     if payload.name:
         s.name = payload.name
@@ -225,8 +326,10 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
     payload_data = payload.dict(exclude_unset=True)
     if "required_room_id" in payload_data:
         rid = payload_data["required_room_id"]
-        if rid and not session.get(Room, rid):
-            raise HTTPException(status_code=400, detail="required room not found")
+        if rid:
+            room = session.get(Room, rid)
+            if not room or room.account_id != account.id:
+                raise HTTPException(status_code=400, detail="required room not found")
         s.required_room_id = rid
     if payload.default_doppelstunde is not None:
         s.default_doppelstunde = payload.default_doppelstunde
@@ -240,8 +343,10 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
         s.is_ag_foerder = bool(payload.is_ag_foerder)
     if "alias_subject_id" in payload_data:
         alias_id = payload_data["alias_subject_id"]
-        if alias_id and not session.get(Subject, alias_id):
-            raise HTTPException(status_code=400, detail="alias subject not found")
+        if alias_id:
+            alias_subject = session.get(Subject, alias_id)
+            if not alias_subject or alias_subject.account_id != account.id:
+                raise HTTPException(status_code=400, detail="alias subject not found")
         s.alias_subject_id = alias_id
     session.add(s)
     session.commit()
@@ -252,10 +357,17 @@ def update_subject(subject_id: int, payload: Subject, session: Session = Depends
 
 
 @router.delete("/subjects/{subject_id}")
-def delete_subject(subject_id: int, session: Session = Depends(get_session)) -> dict:
+def delete_subject(
+    subject_id: int,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> dict:
+    account = resolve_account(session, account_id)
     s = session.get(Subject, subject_id)
     if not s:
         raise HTTPException(status_code=404, detail="subject not found")
+    if s.account_id != account.id:
+        raise HTTPException(status_code=403, detail="subject belongs to different account")
     session.delete(s)
     session.commit()
     return {"ok": True}

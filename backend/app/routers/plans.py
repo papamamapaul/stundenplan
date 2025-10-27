@@ -5,13 +5,14 @@ import json
 from collections import defaultdict
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Query
 from ortools.sat.python import cp_model
 from sqlmodel import Session, select
 from sqlalchemy import delete, text
 
 from ..database import get_session
-from ..models import Class, Plan, PlanSlot, RuleProfile, Subject, Teacher, BasisPlan
+from ..models import Class, Plan, PlanSlot, RuleProfile, Subject, Teacher, BasisPlan, DistributionVersion
+from ..services.accounts import resolve_account
 from ..schemas import (
     GenerateParams,
     GenerateRequest,
@@ -74,30 +75,47 @@ def _ensure_requirement_columns(session: Session) -> None:
         session.commit()
 
 
+def _safe_json_load(raw: Optional[str], fallback):
+    if not raw:
+        return fallback
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return fallback
+
+
 @router.get("", response_model=List[PlanSummary])
-def list_plans(limit: Optional[int] = None, session: Session = Depends(get_session)) -> List[PlanSummary]:
+def list_plans(
+    limit: Optional[int] = None,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> List[PlanSummary]:
+    account = resolve_account(session, account_id)
     _ensure_plan_metadata_columns(session)
     _ensure_subject_columns(session)
     _ensure_requirement_columns(session)
-    stmt = select(Plan).order_by(Plan.created_at.desc())
+    stmt = select(Plan).where(Plan.account_id == account.id).order_by(Plan.created_at.desc())
     if limit:
         stmt = stmt.limit(int(limit))
     rows = session.exec(stmt).all()
-    return [
-        PlanSummary(
-            id=row.id,
-            name=row.name,
-            status=row.status,
-            score=row.score,
-            objective_value=row.objective_value,
-            created_at=row.created_at,
-            version_id=row.version_id,
-            comment=row.comment,
-            rule_profile_id=row.rule_profile_id,
-            rule_keys_active=json.loads(row.rule_keys_active) if row.rule_keys_active else [],
+    summaries: List[PlanSummary] = []
+    for row in rows:
+        rule_keys = _safe_json_load(row.rule_keys_active, [])
+        summaries.append(
+            PlanSummary(
+                id=row.id,
+                name=row.name,
+                status=row.status,
+                score=row.score,
+                objective_value=row.objective_value,
+                created_at=row.created_at,
+                version_id=row.version_id,
+                comment=row.comment,
+                rule_profile_id=row.rule_profile_id,
+                rule_keys_active=rule_keys,
+            )
         )
-        for row in rows
-    ]
+    return summaries
 
 
 @router.get("/rules")
@@ -296,11 +314,24 @@ def list_rules() -> dict:
 
 
 @router.get("/analyze")
-def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(get_session)) -> dict:
+def analyze_inputs(
+    version_id: Optional[int] = None,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> dict:
     """Returns a lightweight analysis of current data for planning: counts per class/subject,
     teacher loads vs deputat, and flags presence for DS/Nachmittag in requirements.
     """
-    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(session, version_id=version_id)
+    account = resolve_account(session, account_id)
+    if version_id is not None:
+        version = session.get(DistributionVersion, version_id)
+        if not version or version.account_id != account.id:
+            raise HTTPException(status_code=404, detail="Version nicht gefunden")
+    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(
+        session,
+        account_id=account.id,
+        version_id=version_id,
+    )
     if df.empty:
         return {"ok": True, "empty": True}
 
@@ -318,7 +349,7 @@ def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(
         df.groupby(df["Lehrer"].astype(str))[["Wochenstunden"]].sum().reset_index().rename(columns={"Lehrer":"lehrer","Wochenstunden":"stunden"})
     )
     # Deputat and metadata from DB
-    trows = session.exec(select(Teacher)).all()
+    trows = session.exec(select(Teacher).where(Teacher.account_id == account.id)).all()
     deputat = {t.name: (t.deputat or t.deputat_soll) for t in trows}
     teacher_info = [
         {
@@ -348,11 +379,20 @@ def analyze_inputs(version_id: Optional[int] = None, session: Session = Depends(
     }
 
 @router.post("/generate", response_model=GenerateResponse)
-def generate_plan(req: GenerateRequest, session: Session = Depends(get_session)) -> GenerateResponse:
+def generate_plan(
+    req: GenerateRequest,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> GenerateResponse:
     _ensure_plan_metadata_columns(session)
     _ensure_subject_columns(session)
     _ensure_requirement_columns(session)
+    account = resolve_account(session, account_id)
     version_id = req.version_id
+    if version_id is not None:
+        version = session.get(DistributionVersion, version_id)
+        if not version or version.account_id != account.id:
+            raise HTTPException(status_code=404, detail="Version nicht gefunden")
     logger.info(
         "GeneratePlan called | version=%s profile=%s dry_run=%s params=%s overrides=%s",
         version_id,
@@ -362,7 +402,11 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
         list((req.override_rules or {}).keys()),
     )
     # Daten laden
-    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(session, version_id=version_id)
+    df, FACH_ID, KLASSEN, LEHRER, teacher_workdays = fetch_requirements_dataframe(
+        session,
+        account_id=account.id,
+        version_id=version_id,
+    )
     if df.empty:
         msg = "Keine Requirements in der DB – bitte zuerst Bedarf anlegen."
         if version_id is not None:
@@ -409,9 +453,9 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
             except (TypeError, ValueError):
                 return fallback
 
-    subject_rows = session.exec(select(Subject)).all()
-    class_rows = session.exec(select(Class)).all()
-    teacher_rows = session.exec(select(Teacher)).all()
+    subject_rows = session.exec(select(Subject).where(Subject.account_id == account.id)).all()
+    class_rows = session.exec(select(Class).where(Class.account_id == account.id)).all()
+    teacher_rows = session.exec(select(Teacher).where(Teacher.account_id == account.id)).all()
 
     subject_id_to_name = {s.id: s.name for s in subject_rows}
     subjects_by_name = {s.name: s.id for s in subject_rows}
@@ -422,7 +466,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     # Regelprofil laden oder Defaults
     if req.rule_profile_id is not None:
         prof = session.get(RuleProfile, req.rule_profile_id)
-        if not prof:
+        if not prof or prof.account_id != account.id:
             raise HTTPException(status_code=404, detail="Regelprofil nicht gefunden")
         prof_dict = _rules_to_dict(prof.dict())
         for entry in rules_definition.get("bools", []):
@@ -468,7 +512,12 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     class_fixed_lookup: dict[str, dict[str, set[int]]] = {}
     flexible_slot_lookup: dict[tuple[str, str, int], bool] = {}
     basis_payload: Dict[str, object] = {}
-    basis_row = session.exec(select(BasisPlan)).first()
+    basis_row = session.exec(select(BasisPlan).where(BasisPlan.account_id == account.id)).first()
+    if not basis_row:
+        basis_row = BasisPlan(name="Basisplan", data=None, account_id=account.id)
+        session.add(basis_row)
+        session.commit()
+        session.refresh(basis_row)
     if basis_row and basis_row.data:
         try:
             basis_payload = json.loads(basis_row.data)
@@ -834,7 +883,13 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
     params_json = json.dumps(req.params.dict())
 
     # Plan speichern
+    existing_plan = session.exec(
+        select(Plan).where(Plan.account_id == account.id, Plan.name == req.name)
+    ).first()
+    if existing_plan:
+        raise HTTPException(status_code=400, detail="Planname bereits vergeben")
     plan_row = Plan(
+        account_id=account.id,
         name=req.name,
         rule_profile_id=req.rule_profile_id,
         seed=req.params.base_seed,
@@ -853,6 +908,7 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
 
     for entry in solver_slots:
         slot = PlanSlot(
+            account_id=account.id,
             plan_id=plan_row.id,
             class_id=entry["class_id"],
             tag=entry["tag"],
@@ -864,29 +920,48 @@ def generate_plan(req: GenerateRequest, session: Session = Depends(get_session))
 
     session.commit()
 
+    try:
+        rules_snapshot_loaded = json.loads(plan_row.rules_snapshot) if plan_row.rules_snapshot else {}
+    except json.JSONDecodeError:
+        rules_snapshot_loaded = dict(effective_rules)
+    try:
+        rule_keys_loaded = json.loads(plan_row.rule_keys_active) if plan_row.rule_keys_active else active_rule_keys
+    except json.JSONDecodeError:
+        rule_keys_loaded = active_rule_keys
+
     return GenerateResponse(
         plan_id=plan_row.id,
         status=plan_row.status,
         score=plan_row.score,
         objective_value=plan_row.objective_value,
         slots=slots_out,
-    rules_snapshot=json.loads(plan_row.rules_snapshot) if plan_row.rules_snapshot else {},
-        rule_keys_active=json.loads(plan_row.rule_keys_active) if plan_row.rule_keys_active else active_rule_keys,
+        rules_snapshot=rules_snapshot_loaded,
+        rule_keys_active=rule_keys_loaded,
         params_used=req.params,
     )
 
 
 @router.get("/{plan_id}", response_model=PlanDetail)
-def get_plan(plan_id: int, session: Session = Depends(get_session)) -> PlanDetail:
+def get_plan(
+    plan_id: int,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> PlanDetail:
     _ensure_plan_metadata_columns(session)
     _ensure_subject_columns(session)
     _ensure_requirement_columns(session)
+    account = resolve_account(session, account_id)
     plan = session.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+    if plan.account_id != account.id:
+        raise HTTPException(status_code=403, detail="Plan gehört zu einem anderen Account")
 
     slot_rows = session.exec(
-        select(PlanSlot).where(PlanSlot.plan_id == plan_id).order_by(PlanSlot.tag, PlanSlot.stunde)
+        select(PlanSlot).where(
+            PlanSlot.plan_id == plan_id,
+            PlanSlot.account_id == account.id,
+        ).order_by(PlanSlot.tag, PlanSlot.stunde)
     ).all()
     slots_out = [
         PlanSlotOut(
@@ -901,8 +976,20 @@ def get_plan(plan_id: int, session: Session = Depends(get_session)) -> PlanDetai
         for row in slot_rows
     ]
 
-    rules_snapshot = json.loads(plan.rules_snapshot) if plan.rules_snapshot else None
-    rule_keys_active = json.loads(plan.rule_keys_active) if plan.rule_keys_active else []
+    if plan.rules_snapshot:
+        try:
+            rules_snapshot = json.loads(plan.rules_snapshot)
+        except json.JSONDecodeError:
+            rules_snapshot = None
+    else:
+        rules_snapshot = None
+    if plan.rule_keys_active:
+        try:
+            rule_keys_active = json.loads(plan.rule_keys_active)
+        except json.JSONDecodeError:
+            rule_keys_active = []
+    else:
+        rule_keys_active = []
     params_used = None
     if plan.params_used:
         try:
@@ -929,14 +1016,31 @@ def get_plan(plan_id: int, session: Session = Depends(get_session)) -> PlanDetai
 
 
 @router.put("/{plan_id}", response_model=Plan)
-def update_plan_metadata(plan_id: int, payload: PlanUpdateRequest, session: Session = Depends(get_session)) -> Plan:
+def update_plan_metadata(
+    plan_id: int,
+    payload: PlanUpdateRequest,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Plan:
+    account = resolve_account(session, account_id)
     plan = session.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+    if plan.account_id != account.id:
+        raise HTTPException(status_code=403, detail="Plan gehört zu einem anderen Account")
     data = payload.dict(exclude_unset=True)
     if "name" in data and data["name"] is not None:
         new_name = str(data["name"]).strip()
         if new_name:
+            exists = session.exec(
+                select(Plan).where(
+                    Plan.account_id == account.id,
+                    Plan.name == new_name,
+                    Plan.id != plan.id,
+                )
+            ).first()
+            if exists:
+                raise HTTPException(status_code=400, detail="Planname bereits vergeben")
             plan.name = new_name
     if "comment" in data:
         plan.comment = data["comment"]
@@ -947,19 +1051,37 @@ def update_plan_metadata(plan_id: int, payload: PlanUpdateRequest, session: Sess
 
 
 @router.put("/{plan_id}/slots", response_model=PlanDetail)
-def replace_plan_slots(plan_id: int, payload: PlanSlotsUpdateRequest, session: Session = Depends(get_session)) -> PlanDetail:
+def replace_plan_slots(
+    plan_id: int,
+    payload: PlanSlotsUpdateRequest,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> PlanDetail:
     _ensure_plan_metadata_columns(session)
+    account = resolve_account(session, account_id)
     plan = session.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan nicht gefunden")
+    if plan.account_id != account.id:
+        raise HTTPException(status_code=403, detail="Plan gehört zu einem anderen Account")
 
     # remove existing slots
-    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id))
+    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id, PlanSlot.account_id == account.id))
     session.commit()
 
     for slot in payload.slots:
+        cls = session.get(Class, slot.class_id)
+        if not cls or cls.account_id != account.id:
+            raise HTTPException(status_code=400, detail=f"Klasse {slot.class_id} gehört zu einem anderen Account")
+        subj = session.get(Subject, slot.subject_id)
+        if not subj or subj.account_id != account.id:
+            raise HTTPException(status_code=400, detail=f"Fach {slot.subject_id} gehört zu einem anderen Account")
+        teacher = session.get(Teacher, slot.teacher_id)
+        if not teacher or teacher.account_id != account.id:
+            raise HTTPException(status_code=400, detail=f"Lehrkraft {slot.teacher_id} gehört zu einem anderen Account")
         session.add(
             PlanSlot(
+                account_id=account.id,
                 plan_id=plan_id,
                 class_id=slot.class_id,
                 tag=slot.tag,
@@ -967,19 +1089,26 @@ def replace_plan_slots(plan_id: int, payload: PlanSlotsUpdateRequest, session: S
                 subject_id=slot.subject_id,
                 teacher_id=slot.teacher_id,
             )
-        )
+    )
 
     session.commit()
 
-    return get_plan(plan_id, session)
+    return get_plan(plan_id, account_id=account.id, session=session)
 
 
 @router.delete("/{plan_id}", status_code=204)
-def delete_plan(plan_id: int, session: Session = Depends(get_session)) -> Response:
+def delete_plan(
+    plan_id: int,
+    account_id: Optional[int] = Query(None),
+    session: Session = Depends(get_session),
+) -> Response:
+    account = resolve_account(session, account_id)
     plan = session.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan nicht gefunden")
-    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id))
+    if plan.account_id != account.id:
+        raise HTTPException(status_code=403, detail="Plan gehört zu einem anderen Account")
+    session.exec(delete(PlanSlot).where(PlanSlot.plan_id == plan_id, PlanSlot.account_id == account.id))
     session.delete(plan)
     session.commit()
     return Response(status_code=204)

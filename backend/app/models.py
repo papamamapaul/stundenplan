@@ -26,9 +26,41 @@ class NachmittagEnum(str, Enum):
     nein = "nein"
 
 
-class Teacher(SQLModel, table=True):
+class AccountRole(str, Enum):
+    owner = "owner"
+    planner = "planner"
+    viewer = "viewer"
+    teacher = "teacher"
+
+
+class Account(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    description: Optional[str] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True, unique=True)
+    full_name: Optional[str] = Field(default=None)
+    password_hash: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
+    is_active: bool = Field(default=True)
+    is_superuser: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AccountUser(SQLModel, table=True):
+    account_id: int = Field(foreign_key="account.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    role: AccountRole = Field(default=AccountRole.owner)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Teacher(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
     kuerzel: Optional[str] = Field(default=None, index=True)
     deputat_soll: Optional[int] = Field(default=None)
     # New fields for management UI
@@ -44,13 +76,15 @@ class Teacher(SQLModel, table=True):
 
 class Class(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
     homeroom_teacher_id: Optional[int] = Field(default=None, foreign_key="teacher.id")
 
 
 class Subject(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
     kuerzel: Optional[str] = Field(default=None, index=True)
     color: Optional[str] = Field(default=None)
     required_room_id: Optional[int] = Field(default=None, foreign_key="room.id")
@@ -72,6 +106,7 @@ class RequirementParticipationEnum(str, Enum):
 
 class Requirement(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
     class_id: int = Field(foreign_key="class.id")
     subject_id: int = Field(foreign_key="subject.id")
     teacher_id: int = Field(foreign_key="teacher.id")
@@ -91,6 +126,7 @@ class ClassSubject(SQLModel, table=True):
     Lehrkraft ist hier nicht enthalten (nur Bedarf/Struktur).
     """
     id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
     class_id: int = Field(foreign_key="class.id")
     subject_id: int = Field(foreign_key="subject.id")
     wochenstunden: int
@@ -101,7 +137,8 @@ class ClassSubject(SQLModel, table=True):
 
 class RuleProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
 
     # Schalter (Default an die Streamlit-Defaults angelehnt)
     stundenbegrenzung: bool = True
@@ -125,6 +162,7 @@ class RuleProfile(SQLModel, table=True):
 
 class Plan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
     name: str
     rule_profile_id: Optional[int] = Field(default=None, foreign_key="ruleprofile.id")
     seed: Optional[int] = None
@@ -142,6 +180,7 @@ class Plan(SQLModel, table=True):
 
 class PlanSlot(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
     plan_id: int = Field(foreign_key="plan.id")
     class_id: int = Field(foreign_key="class.id")
     tag: str  # 'Mo' | 'Di' | 'Mi' | 'Do' | 'Fr'
@@ -152,7 +191,8 @@ class PlanSlot(SQLModel, table=True):
 
 class DistributionVersion(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
     comment: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -160,6 +200,7 @@ class DistributionVersion(SQLModel, table=True):
 
 class BasisPlan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
     name: str = Field(default="Basisplan")
     # JSON payload as text (per-class rules, allowed slots, windows, fixed entries)
     data: Optional[str] = Field(default=None)
@@ -168,7 +209,8 @@ class BasisPlan(SQLModel, table=True):
 
 class Room(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True)
+    account_id: int = Field(foreign_key="account.id", index=True, default=1)
+    name: str = Field(index=True)
     type: Optional[str] = Field(default=None, index=True)  # z. B. Sporthalle, Schwimmhalle, Werkraum, Klassenraum
     capacity: Optional[int] = Field(default=None)
     is_classroom: bool = Field(default=False)
