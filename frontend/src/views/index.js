@@ -3,6 +3,7 @@ import { createDistributionView } from './distribution.js';
 import { createBasisplanView } from './basisplan.js';
 import { createPlanView } from './plan.js';
 import { createPlanArchiveView } from './plans.js';
+import { createBackupView } from './backup.js';
 
 const registry = new Map();
 
@@ -14,6 +15,7 @@ registry.set('#/basisplan', () => createBasisplanView());
 registry.set('#/stundenverteilung', () => createDistributionView());
 registry.set('#/datenpflege', () => createDataMaintenanceView());
 registry.set('#/einstellungen', () => createSettingsView());
+registry.set('#/backup', () => createBackupView());
 
 export function registerView(route, factory) {
   registry.set(route, factory);

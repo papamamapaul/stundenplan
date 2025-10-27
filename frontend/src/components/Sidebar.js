@@ -7,6 +7,7 @@ const NAVIGATION = [
       { label: 'Basisplan', hash: '#/basisplan' },
       { label: 'Stundenverteilung', hash: '#/stundenverteilung' },
       { label: 'Datenpflege', hash: '#/datenpflege' },
+      { label: 'Import / Export', hash: '#/backup' },
     ],
   },
 ];

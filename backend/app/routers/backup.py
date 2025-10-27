@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from ..database import get_session
@@ -19,6 +22,9 @@ from ..models import (
     NachmittagEnum,
     DistributionVersion,
     RequirementConfigSourceEnum,
+    BasisPlan,
+    Plan,
+    PlanSlot,
 )
 from ..schemas import (
     BackupPayload,
@@ -28,6 +34,15 @@ from ..schemas import (
     BackupRoom,
     BackupCurriculumItem,
     BackupRequirementItem,
+    SetupExport,
+    DistributionExport,
+    DistributionVersionExport,
+    BasisPlanExport,
+    PlansExport,
+    PlanExportItem,
+    PlanExportMetadata,
+    PlanSlotExport,
+    BasisPlanData,
 )
 
 
@@ -145,6 +160,36 @@ def export_data(session: Session = Depends(get_session)) -> BackupPayload:
         requirements=out_requirements,
         rule_profiles=rp_dicts,
     )
+
+
+@router.get("/export/setup", response_model=SetupExport)
+def export_setup(session: Session = Depends(get_session)) -> SetupExport:
+    payload = export_data(session=session)
+    return SetupExport(
+        teachers=payload.teachers or [],
+        classes=payload.classes or [],
+        subjects=payload.subjects or [],
+        rooms=payload.rooms or [],
+        curriculum=payload.curriculum or [],
+        rule_profiles=payload.rule_profiles or [],
+    )
+
+
+@router.post("/import/setup")
+def import_setup(
+    payload: SetupExport,
+    session: Session = Depends(get_session),
+    replace: bool = Query(False, description="Bestehende Daten ersetzen (truncate before import)"),
+):
+    converted = BackupPayload(
+        teachers=payload.teachers,
+        classes=payload.classes,
+        subjects=payload.subjects,
+        rooms=payload.rooms,
+        curriculum=payload.curriculum,
+        rule_profiles=payload.rule_profiles,
+    )
+    return import_data(payload=converted, session=session, replace=replace)
 
 
 @router.post("/import")
@@ -376,3 +421,354 @@ def import_data(
             session.commit()
 
     return {"ok": True}
+
+
+def _lookup_maps(session: Session) -> Dict[str, Dict[int, object]]:
+    teachers = session.exec(select(Teacher)).all()
+    classes = session.exec(select(Class)).all()
+    subjects = session.exec(select(Subject)).all()
+    rooms = session.exec(select(Room)).all()
+    return {
+        "teachers": {t.id: t for t in teachers},
+        "classes": {c.id: c for c in classes},
+        "subjects": {s.id: s for s in subjects},
+        "rooms": {r.id: r for r in rooms},
+    }
+
+
+@router.get("/export/distribution", response_model=DistributionExport)
+def export_distribution(
+    version_id: int = Query(..., description="ID der zu exportierenden Stundenverteilungs-Version"),
+    session: Session = Depends(get_session),
+) -> DistributionExport:
+    version = session.get(DistributionVersion, version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Version nicht gefunden")
+
+    data_maps = _lookup_maps(session)
+    teacher_by_id = data_maps["teachers"]
+    class_by_id = data_maps["classes"]
+    subject_by_id = data_maps["subjects"]
+
+    requirements = session.exec(select(Requirement).where(Requirement.version_id == version_id)).all()
+    items: List[BackupRequirementItem] = []
+    for req in requirements:
+        teacher = teacher_by_id.get(req.teacher_id)
+        cls = class_by_id.get(req.class_id)
+        subject = subject_by_id.get(req.subject_id)
+        if not (teacher and cls and subject):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ungültiger Requirement-Eintrag (ID {req.id}) – Stammdaten nicht gefunden.",
+            )
+        teacher_name = teacher.kuerzel or teacher.name or str(teacher.id)
+        items.append(
+            BackupRequirementItem(
+                class_name=cls.name,
+                subject_name=subject.name,
+                teacher_name=teacher_name,
+                wochenstunden=req.wochenstunden,
+                doppelstunde=req.doppelstunde.value,
+                nachmittag=req.nachmittag.value,
+                participation=req.participation.value if req.participation else None,
+                version_name=version.name,
+                config_source=(
+                    req.config_source.value
+                    if isinstance(req.config_source, RequirementConfigSourceEnum)
+                    else (req.config_source if isinstance(req.config_source, str) else None)
+                ),
+            )
+        )
+
+    version_export = DistributionVersionExport(
+        name=version.name,
+        comment=version.comment,
+        created_at=version.created_at,
+        updated_at=version.updated_at,
+    )
+    return DistributionExport(version=version_export, requirements=items)
+
+
+@router.post("/import/distribution")
+def import_distribution(
+    payload: DistributionExport,
+    session: Session = Depends(get_session),
+    replace: bool = Query(False, description="Vorhandene Requirements der Version überschreiben, falls sie existiert"),
+) -> Dict[str, int]:
+    if not payload.version:
+        raise HTTPException(status_code=400, detail="Versionsinformationen fehlen.")
+
+    version = session.exec(select(DistributionVersion).where(DistributionVersion.name == payload.version.name)).first()
+    if version:
+        if replace:
+            session.exec(delete(Requirement).where(Requirement.version_id == version.id))
+            session.commit()
+        else:
+            raise HTTPException(status_code=409, detail="Version existiert bereits. Mit replace=true überschreiben.")
+        version.comment = payload.version.comment
+        version.updated_at = payload.version.updated_at or datetime.utcnow()
+        session.add(version)
+        session.commit()
+        session.refresh(version)
+    else:
+        version = DistributionVersion(
+            name=payload.version.name,
+            comment=payload.version.comment,
+            created_at=payload.version.created_at or datetime.utcnow(),
+            updated_at=payload.version.updated_at or datetime.utcnow(),
+        )
+        session.add(version)
+        session.commit()
+        session.refresh(version)
+
+    teachers = session.exec(select(Teacher)).all()
+    teachers_map = {t.name: t for t in teachers}
+    for t in teachers:
+        if t.kuerzel:
+            teachers_map[t.kuerzel] = t
+    classes_map = {c.name: c for c in session.exec(select(Class)).all()}
+    subjects_map = {s.name: s for s in session.exec(select(Subject)).all()}
+
+    new_requirements: List[Requirement] = []
+    for item in payload.requirements or []:
+        cls = classes_map.get(item.class_name)
+        subject = subjects_map.get(item.subject_name)
+        teacher = teachers_map.get(item.teacher_name) if item.teacher_name else None
+        if not cls or not subject or not teacher:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Klasse/Fach/Lehrkraft nicht gefunden: {item.class_name}/{item.subject_name}/{item.teacher_name}",
+            )
+        ds = DoppelstundeEnum(item.doppelstunde) if item.doppelstunde else DoppelstundeEnum.kann
+        nm = NachmittagEnum(item.nachmittag) if item.nachmittag else NachmittagEnum.kann
+        participation = RequirementParticipationEnum(item.participation) if item.participation else RequirementParticipationEnum.curriculum
+        config_source = RequirementConfigSourceEnum(item.config_source) if item.config_source else RequirementConfigSourceEnum.subject
+        new_requirements.append(
+            Requirement(
+                class_id=cls.id,
+                subject_id=subject.id,
+                teacher_id=teacher.id,
+                version_id=version.id,
+                wochenstunden=item.wochenstunden,
+                doppelstunde=ds,
+                nachmittag=nm,
+                participation=participation,
+                config_source=config_source,
+            )
+        )
+
+    if new_requirements:
+        session.bulk_save_objects(new_requirements)
+        session.commit()
+
+    return {"version_id": version.id}
+
+
+def _load_basisplan_data(row: BasisPlan) -> BasisPlanData:
+    raw: Dict[str, object] = {}
+    if row.data:
+        try:
+            raw = json.loads(row.data)
+        except json.JSONDecodeError:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    raw.setdefault("meta", {"version": 1})
+    raw.setdefault("classes", {})
+    raw.setdefault("rooms", {})
+    raw.setdefault("windows", {})
+    raw.setdefault("fixed", {})
+    raw.setdefault("flexible", {})
+    return BasisPlanData(**raw)
+
+
+@router.get("/export/basisplan", response_model=BasisPlanExport)
+def export_basisplan_snapshot(session: Session = Depends(get_session)) -> BasisPlanExport:
+    row = session.exec(select(BasisPlan)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Kein Basisplan gespeichert.")
+    data = _load_basisplan_data(row)
+    return BasisPlanExport(name=row.name, updated_at=row.updated_at, data=data)
+
+
+@router.post("/import/basisplan")
+def import_basisplan_snapshot(
+    payload: BasisPlanExport,
+    session: Session = Depends(get_session),
+) -> Dict[str, int]:
+    row = session.exec(select(BasisPlan)).first()
+    if not row:
+        row = BasisPlan(name=payload.name)
+    if payload.name:
+        row.name = payload.name
+    if payload.data is not None:
+        row.data = json.dumps(payload.data.dict())
+    row.updated_at = payload.updated_at or datetime.utcnow()
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"basisplan_id": row.id}
+
+
+@router.get("/export/plans", response_model=PlansExport)
+def export_plans(
+    plan_ids: List[int] = Query(..., description="Kommaseparierte Liste von Plan-IDs", alias="plan_ids"),
+    session: Session = Depends(get_session),
+) -> PlansExport:
+    if not plan_ids:
+        raise HTTPException(status_code=400, detail="Mindestens eine Plan-ID angeben.")
+    plans = session.exec(select(Plan).where(Plan.id.in_(plan_ids))).all()
+    if not plans:
+        raise HTTPException(status_code=404, detail="Keine passenden Pläne gefunden.")
+
+    data_maps = _lookup_maps(session)
+    teacher_by_id = data_maps["teachers"]
+    class_by_id = data_maps["classes"]
+    subject_by_id = data_maps["subjects"]
+
+    rule_profiles = {rp.id: rp for rp in session.exec(select(RuleProfile)).all()}
+    versions = {v.id: v for v in session.exec(select(DistributionVersion)).all()}
+
+    items: List[PlanExportItem] = []
+    for plan in plans:
+        version = versions.get(plan.version_id) if plan.version_id else None
+        rule_profile = rule_profiles.get(plan.rule_profile_id) if plan.rule_profile_id else None
+        rule_keys = []
+        if plan.rule_keys_active:
+            try:
+                rule_keys = json.loads(plan.rule_keys_active)
+            except json.JSONDecodeError:
+                rule_keys = []
+        params_used = None
+        if plan.params_used:
+            try:
+                params_used = json.loads(plan.params_used)
+            except json.JSONDecodeError:
+                params_used = None
+        rules_snapshot = None
+        if plan.rules_snapshot:
+            try:
+                rules_snapshot = json.loads(plan.rules_snapshot)
+            except json.JSONDecodeError:
+                rules_snapshot = None
+
+        metadata = PlanExportMetadata(
+            name=plan.name,
+            status=plan.status,
+            score=plan.score,
+            objective_value=plan.objective_value,
+            created_at=plan.created_at,
+            comment=plan.comment,
+            version_name=version.name if version else None,
+            rule_profile_name=rule_profile.name if rule_profile else None,
+            rule_keys_active=rule_keys,
+            rules_snapshot=rules_snapshot,
+            params_used=params_used,
+        )
+
+        slots = session.exec(select(PlanSlot).where(PlanSlot.plan_id == plan.id)).all()
+        slot_items: List[PlanSlotExport] = []
+        for slot in slots:
+            cls = class_by_id.get(slot.class_id)
+            subject = subject_by_id.get(slot.subject_id)
+            teacher = teacher_by_id.get(slot.teacher_id)
+            if not (cls and subject and teacher):
+                raise HTTPException(status_code=400, detail=f"PlanSlot verweist auf fehlende Stammdaten (Plan {plan.id}).")
+            slot_items.append(
+                PlanSlotExport(
+                    class_name=cls.name,
+                    subject_name=subject.name,
+                    teacher_name=teacher.kuerzel or teacher.name or str(teacher.id),
+                    tag=slot.tag,
+                    stunde=slot.stunde,
+                )
+            )
+
+        items.append(PlanExportItem(plan=metadata, slots=slot_items))
+
+    return PlansExport(plans=items)
+
+
+@router.post("/import/plans")
+def import_plans(
+    payload: PlansExport,
+    session: Session = Depends(get_session),
+    replace: bool = Query(False, description="Vorhandene Pläne mit gleichem Namen vor dem Import löschen"),
+) -> Dict[str, int]:
+    if not payload.plans:
+        raise HTTPException(status_code=400, detail="Keine Pläne im Payload.")
+    teachers = session.exec(select(Teacher)).all()
+    teacher_map = {t.name: t for t in teachers}
+    for t in teachers:
+        if t.kuerzel:
+            teacher_map[t.kuerzel] = t
+    class_map = {c.name: c for c in session.exec(select(Class)).all()}
+    subject_map = {s.name: s for s in session.exec(select(Subject)).all()}
+    rule_profile_map = {rp.name: rp for rp in session.exec(select(RuleProfile)).all()}
+    version_map = {v.name: v for v in session.exec(select(DistributionVersion)).all()}
+
+    created_plan_ids: List[int] = []
+    for item in payload.plans:
+        meta = item.plan
+        if replace:
+            existing_plans = session.exec(select(Plan).where(Plan.name == meta.name)).all()
+            for existing_plan in existing_plans:
+                session.exec(delete(PlanSlot).where(PlanSlot.plan_id == existing_plan.id))
+                session.exec(delete(Plan).where(Plan.id == existing_plan.id))
+            if existing_plans:
+                session.commit()
+
+        version_id = None
+        if meta.version_name:
+            version = version_map.get(meta.version_name)
+            if not version:
+                raise HTTPException(status_code=400, detail=f"Version '{meta.version_name}' nicht gefunden. Bitte zuerst exportierte Stundenverteilung importieren.")
+            version_id = version.id
+
+        rule_profile_id = None
+        if meta.rule_profile_name:
+            rp = rule_profile_map.get(meta.rule_profile_name)
+            if not rp:
+                raise HTTPException(status_code=400, detail=f"Regelprofil '{meta.rule_profile_name}' nicht gefunden.")
+            rule_profile_id = rp.id
+
+        plan = Plan(
+            name=meta.name,
+            status=meta.status,
+            score=meta.score,
+            objective_value=meta.objective_value,
+            created_at=meta.created_at,
+            comment=meta.comment,
+            version_id=version_id,
+            rule_profile_id=rule_profile_id,
+        )
+        plan.rule_keys_active = json.dumps(meta.rule_keys_active or [])
+        plan.rules_snapshot = json.dumps(meta.rules_snapshot) if meta.rules_snapshot is not None else None
+        plan.params_used = json.dumps(meta.params_used) if meta.params_used is not None else None
+
+        session.add(plan)
+        session.commit()
+        session.refresh(plan)
+
+        for slot_data in item.slots:
+            cls = class_map.get(slot_data.class_name)
+            subject = subject_map.get(slot_data.subject_name)
+            teacher = teacher_map.get(slot_data.teacher_name)
+            if not (cls and subject and teacher):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Stammdaten fehlen für Slot {slot_data.class_name}/{slot_data.subject_name}/{slot_data.teacher_name}",
+                )
+            slot = PlanSlot(
+                plan_id=plan.id,
+                class_id=cls.id,
+                subject_id=subject.id,
+                teacher_id=teacher.id,
+                tag=slot_data.tag,
+                stunde=slot_data.stunde,
+            )
+            session.add(slot)
+        session.commit()
+        created_plan_ids.append(plan.id)
+
+    return {"count": len(created_plan_ids)}

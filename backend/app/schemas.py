@@ -158,6 +158,66 @@ class BackupPayload(BaseModel):
     versions: Optional[List[dict]] = None  # list of {name, comment}
 
 
+class SetupExport(BaseModel):
+    teachers: List[BackupTeacher] = Field(default_factory=list)
+    classes: List[BackupClass] = Field(default_factory=list)
+    subjects: List[BackupSubject] = Field(default_factory=list)
+    rooms: List[BackupRoom] = Field(default_factory=list)
+    curriculum: List[BackupCurriculumItem] = Field(default_factory=list)
+    rule_profiles: List[dict] = Field(default_factory=list)
+
+
+class DistributionVersionExport(BaseModel):
+    name: str
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DistributionExport(BaseModel):
+    version: DistributionVersionExport
+    requirements: List[BackupRequirementItem] = Field(default_factory=list)
+
+
+class BasisPlanExport(BaseModel):
+    name: str
+    updated_at: datetime
+    data: BasisPlanData
+
+
+class PlanExportMetadata(BaseModel):
+    name: str
+    status: str
+    score: Optional[float] = None
+    objective_value: Optional[float] = None
+    created_at: datetime
+    comment: Optional[str] = None
+    version_name: Optional[str] = None
+    rule_profile_name: Optional[str] = None
+    rule_keys_active: List[str] = Field(default_factory=list)
+    rules_snapshot: Optional[Dict[str, Any]] = None
+    params_used: Optional[Dict[str, Any]] = None
+
+
+class PlanSlotExport(BaseModel):
+    class_name: str
+    subject_name: str
+    teacher_name: str
+    tag: str
+    stunde: int
+    is_fixed: Optional[bool] = None
+    is_flexible: Optional[bool] = None
+
+
+class PlanExportItem(BaseModel):
+    plan: PlanExportMetadata
+    slots: List[PlanSlotExport] = Field(default_factory=list)
+
+
+class PlansExport(BaseModel):
+    plans: List[PlanExportItem] = Field(default_factory=list)
+
+
 class BasisPlanData(BaseModel):
     classes: Dict[str, Any] = Field(default_factory=dict)
     rooms: Dict[str, Any] = Field(default_factory=dict)

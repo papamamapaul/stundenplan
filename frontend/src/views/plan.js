@@ -7,6 +7,7 @@ import { fetchClasses } from '../api/classes.js';
 import { fetchTeachers } from '../api/teachers.js';
 import { formatError, formModal } from '../utils/ui.js';
 import { createTabs } from '../components/Tabs.js';
+import { openPlanPrintModal } from '../components/PlanPrintModal.js';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 const STUNDEN = Array.from({ length: 8 }, (_, idx) => idx + 1);
@@ -1330,6 +1331,26 @@ export function createPlanView() {
         editBtn.title = 'Bitte zuerst speichern';
       }
       cardActions.appendChild(editBtn);
+
+      const printBtn = document.createElement('button');
+      printBtn.type = 'button';
+      printBtn.className = 'btn btn-xs btn-outline';
+      printBtn.textContent = 'Drucken';
+      if (!entry.slots || !entry.slots.length) {
+        printBtn.disabled = true;
+        printBtn.title = 'Keine Slots vorhanden';
+      } else {
+        printBtn.addEventListener('click', () => {
+          openPlanPrintModal({
+            plan: entry,
+            classes: state.classes,
+            teachers: state.teachers,
+            subjects: state.subjects,
+          });
+        });
+      }
+      cardActions.appendChild(printBtn);
+
       body.appendChild(cardActions);
 
       const activeRulesBlock = renderActiveRuleBadges(entry);

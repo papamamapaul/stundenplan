@@ -58,3 +58,4 @@ uvicorn backend.app.main:app --reload
 - Solver-Parameter, UI-Flows und fachliche Regeln sind detailliert in `Lastenheft.md` beschrieben (siehe insbesondere Abschnitt 5).
 - Änderungen an Anforderungen, UX oder Datenmodell sollten zuerst im Lastenheft festgehalten und anschließend im Code umgesetzt werden.
 - Wochenstunden, Doppelstunden-Modus und Nachmittagsregeln werden zentral unter `Datenpflege > Fächer` pro Klasse gepflegt; der Solver übernimmt die Werte automatisch.
+- Selektive JSON-Exporte/-Importe findest du unter `Import / Export` (Setup, Stundenverteilungen, Basisplan, berechnete Pläne).
