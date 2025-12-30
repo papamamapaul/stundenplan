@@ -1,13 +1,17 @@
+import { buildAccountQuery } from './helpers.js';
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 export async function fetchRooms() {
-  const res = await fetch('/rooms');
+  const query = buildAccountQuery();
+  const res = await fetch(`/rooms${query}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function createRoom(payload) {
-  const res = await fetch('/rooms', {
+  const query = buildAccountQuery();
+  const res = await fetch(`/rooms${query}`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -17,7 +21,8 @@ export async function createRoom(payload) {
 }
 
 export async function updateRoom(id, payload) {
-  const res = await fetch(`/rooms/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/rooms/${id}${query}`, {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -27,7 +32,8 @@ export async function updateRoom(id, payload) {
 }
 
 export async function deleteRoom(id) {
-  const res = await fetch(`/rooms/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/rooms/${id}${query}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error(await res.text());

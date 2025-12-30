@@ -1,4 +1,14 @@
+import { buildAccountQuery } from './helpers.js';
+import { getActivePlanningPeriodId } from '../store/planningPeriods.js';
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+function withPlanningPeriod(params = {}) {
+  const periodId = getActivePlanningPeriodId();
+  const merged = { ...params };
+  if (periodId != null) merged.planning_period_id = periodId;
+  return buildAccountQuery(merged);
+}
 
 export async function fetchPlanRules() {
   const res = await fetch('/plans/rules');
@@ -7,13 +17,15 @@ export async function fetchPlanRules() {
 }
 
 export async function fetchPlans() {
-  const res = await fetch('/plans');
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans${query}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function fetchPlanDetail(planId) {
-  const res = await fetch(`/plans/${planId}`);
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans/${planId}${query}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -34,7 +46,8 @@ export async function generatePlan(payload) {
   // eslint-disable-next-line no-console
   console.debug('POST /plans/generate', cleaned);
 
-  const res = await fetch('/plans/generate', {
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans/generate${query}`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(cleaned),
@@ -49,7 +62,8 @@ export async function generatePlan(payload) {
 }
 
 export async function updatePlan(planId, payload) {
-  const res = await fetch(`/plans/${planId}`, {
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans/${planId}${query}`, {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -59,7 +73,8 @@ export async function updatePlan(planId, payload) {
 }
 
 export async function updatePlanSlots(planId, slots) {
-  const res = await fetch(`/plans/${planId}/slots`, {
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans/${planId}/slots${query}`, {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify({ slots }),
@@ -69,7 +84,8 @@ export async function updatePlanSlots(planId, slots) {
 }
 
 export async function deletePlan(planId) {
-  const res = await fetch(`/plans/${planId}`, {
+  const query = withPlanningPeriod();
+  const res = await fetch(`/plans/${planId}${query}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error(await res.text());

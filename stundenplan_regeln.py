@@ -17,7 +17,11 @@ def add_constraints(
     room_plan=None,
     fixed_slots=None,
     flexible_groups=None,
+    flexible_slot_limits=None,
     class_windows=None,
+    pool_teacher_names=None,
+    slots_per_day=8,
+    pause_slots=None,
 ):
     """
     Baut alle Constraints und (falls aktiv) Soft-Objectives auf.
@@ -51,7 +55,7 @@ def add_constraints(
       - mittagsschule_vormittag (bool)       -> 4/≥5-Logik je Tag/Klasse
 
     Zusätzlich (NEU): Gewichte für Soft-Objectives – kommen aus regeln, haben Defaults:
-      - W_GAPS_START, W_GAPS_INSIDE, W_EVEN_DIST, W_EINZEL_KANN
+      - W_GAPS_START, W_GAPS_INSIDE, W_EVEN_DIST, W_EINZEL_KANN, W_EINZEL_SOLL
       - TEACHER_GAPS_DAY_MAX, TEACHER_GAPS_WEEK_MAX, W_TEACHER_GAPS
     """
 
@@ -65,6 +69,8 @@ def add_constraints(
     W_GAPS_INSIDE = int(regeln.get("W_GAPS_INSIDE", 3))    # 0->1 Übergang innerhalb des Tages (Hohlstunde)
     W_EVEN_DIST   = int(regeln.get("W_EVEN_DIST", 1))      # Gleichmäßige Verteilung über die Woche
     W_EINZEL_KANN = int(regeln.get("W_EINZEL_KANN", 5))    # Einzelstunden-Penalty, wenn Doppelstunde "kann"
+    W_EINZEL_SOLL = int(regeln.get("W_EINZEL_SOLL", 8))    # Fehlende Doppelstunden, wenn Doppelstunde "soll"
+    W_BAND_OPTIONAL = int(regeln.get("W_BAND_OPTIONAL", 6))  # Optionales Bandfach nicht eingeplant
 
     obj_terms = []
 
@@ -106,12 +112,21 @@ def add_constraints(
     W_TEACHER_GAPS = int(regeln.get("W_TEACHER_GAPS", 2))
 
     teacher_workdays = teacher_workdays or {}
+    slots_per_day = max(1, int(slots_per_day))
+    slots_range = range(slots_per_day)
+    pool_teacher_names_norm = {
+        str(name).strip().lower()
+        for name in (pool_teacher_names or [])
+        if str(name).strip()
+    }
+    pause_slots = {int(idx) for idx in (pause_slots or []) if int(idx) >= 0}
+    teaching_slots = [idx for idx in range(slots_per_day) if idx not in pause_slots]
 
     # -------- 1) Jede Fachstunde MUSS platziert werden --------
     for fid in FACH_ID:
         anzahl = int(df.loc[fid, 'Wochenstunden'])
         participation = fid_participation.get(fid, 'curriculum')
-        total = sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8))
+        total = sum(plan[(fid, tag, std)] for tag in TAGE for std in slots_range)
         if participation == 'ag' or not enforce_hours:
             model.Add(total <= anzahl)
         else:
@@ -120,9 +135,18 @@ def add_constraints(
     # -------- 2) Keine Überlagerung (Lehrer/Klasse nie doppelt in einer Stunde) --------
     if enforce_teacher_conflicts or enforce_class_conflicts:
         for tag in TAGE:
-            for std in range(8):
+            for std in slots_range:
+                if std in pause_slots:
+                    for fid in FACH_ID:
+                        key = (fid, tag, std)
+                        if key in plan:
+                            model.Add(plan[key] == 0)
+                    continue
                 if enforce_teacher_conflicts:
                     for lehrer in LEHRER:
+                        normalized_teacher_name = str(lehrer).strip().lower()
+                        if normalized_teacher_name in pool_teacher_names_norm:
+                            continue
                         belegte = [plan[(fid, tag, std)] for fid in FACH_ID if df.loc[fid, 'Lehrer'] == lehrer]
                         if not belegte:
                             continue
@@ -194,7 +218,7 @@ def add_constraints(
             for tag in TAGE:
                 if bool(workdays.get(tag, True)):
                     continue
-                for std in range(8):
+                for std in slots_range:
                     key = (fid, tag, std)
                     if key in plan:
                         model.Add(plan[key] == 0)
@@ -237,7 +261,10 @@ def add_constraints(
     if room_assignments and enforce_room_windows:
         for fid, rid in room_assignments.items():
             for tag in TAGE:
-                for std in range(8):
+                for std in slots_range:
+                    if std in pause_slots:
+                        model.Add(plan[(fid, tag, std)] == 0)
+                        continue
                     if not _room_slot_allowed(rid, tag, std):
                         model.Add(plan[(fid, tag, std)] == 0)
 
@@ -251,7 +278,7 @@ def add_constraints(
                 slots_allowed = day_map.get(tag)
                 if not slots_allowed:
                     continue
-                for std in range(min(len(slots_allowed), 8)):
+                for std in range(min(len(slots_allowed), slots_per_day)):
                     if not bool(slots_allowed[std]):
                         model.Add(plan[(fid, tag, std)] == 0)
 
@@ -259,20 +286,26 @@ def add_constraints(
     if enforce_day_limits:
         for tag in ['Mo', 'Di', 'Mi', 'Do']:
             for klasse in KLASSEN:
-                tagstunden = [plan[(fid, tag, std)]
-                              for fid in FACH_ID for std in range(6)
-                              if str(df.loc[fid, 'Klasse']) == str(klasse)]
-                model.Add(sum(tagstunden) <= 6)
+                tagstunden = [
+                    plan[(fid, tag, std)]
+                    for fid in FACH_ID for std in slots_range
+                    if str(df.loc[fid, 'Klasse']) == str(klasse)
+                ]
+                if tagstunden:
+                    model.Add(sum(tagstunden) <= 6)
         for klasse in KLASSEN:
-            tagstunden = [plan[(fid, 'Fr', std)]
-                          for fid in FACH_ID for std in range(5)
-                          if str(df.loc[fid, 'Klasse']) == str(klasse)]
-            model.Add(sum(tagstunden) <= 5)
+            tagstunden = [
+                plan[(fid, 'Fr', std)]
+                for fid in FACH_ID for std in slots_range
+                if str(df.loc[fid, 'Klasse']) == str(klasse)
+            ]
+            if tagstunden:
+                model.Add(sum(tagstunden) <= 5)
 
     # 3b) Wenn Tageslimit erreicht (6/5), MUSS Stunde 1 belegt sein (sonst optional)
         if enforce_first_slot:
             for tag in TAGE:
-                max_tag = 6 if tag != 'Fr' else 5
+                max_tag = min(6 if tag != 'Fr' else 5, slots_per_day)
                 for klasse in KLASSEN:
                     belegte_stunden = [plan[(fid, tag, std)]
                                        for fid in FACH_ID for std in range(max_tag)
@@ -288,17 +321,17 @@ def add_constraints(
                         model.Add(sum(first_slot) == 1).OnlyEnforceIf(must_first)
 
     # -------- 4) Hohlstunden: Soft- oder Hard-Variante --------
-    def _occ_vars_for_klasse_tag(klasse, tag, max_slots=8):
-        occ = [model.NewBoolVar(f"occ_{klasse}_{tag}_{s}") for s in range(max_slots)]
-        for s in range(max_slots):
-            slots = [plan[(fid, tag, s)]
+    def _occ_vars_for_klasse_tag(klasse, tag, slot_indices):
+        occ = [model.NewBoolVar(f"occ_{klasse}_{tag}_{pos}") for pos in range(len(slot_indices))]
+        for pos, actual in enumerate(slot_indices):
+            slots = [plan[(fid, tag, actual)]
                      for fid in FACH_ID
                      if str(df.loc[fid, 'Klasse']) == str(klasse)]
             if slots:
-                model.Add(sum(slots) >= occ[s])
-                model.Add(sum(slots) <= len(slots) * occ[s])
+                model.Add(sum(slots) >= occ[pos])
+                model.Add(sum(slots) <= len(slots) * occ[pos])
             else:
-                model.Add(occ[s] == 0)
+                model.Add(occ[pos] == 0)
         return occ
 
     def _add_no_gap_soft(occ, weight_start=W_GAPS_START, weight_gaps=W_GAPS_INSIDE):
@@ -313,12 +346,13 @@ def add_constraints(
             terms.append(weight_gaps * t01)
         return terms
 
-    def _add_no_gap_hard(klasse, tag, max_slots=8):
-        occ = _occ_vars_for_klasse_tag(klasse, tag, max_slots)
+    def _add_no_gap_hard(klasse, tag, slot_indices):
+        occ = _occ_vars_for_klasse_tag(klasse, tag, slot_indices)
         any_day = model.NewBoolVar(f"any_{klasse}_{tag}")
         model.Add(sum(occ) >= 1).OnlyEnforceIf(any_day)
         model.Add(sum(occ) == 0).OnlyEnforceIf(any_day.Not())
 
+        max_slots = len(slot_indices)
         first = model.NewIntVar(0, max_slots - 1, f"first_{klasse}_{tag}")
         last  = model.NewIntVar(0, max_slots - 1, f"last_{klasse}_{tag}")
         M = 1000
@@ -340,28 +374,31 @@ def add_constraints(
             model.Add(occ[s] == 0).OnlyEnforceIf([any_day, after])
             model.Add(occ[s] == 1).OnlyEnforceIf([any_day, inside])
 
+    teaching_slots_list = teaching_slots if teaching_slots else list(range(slots_per_day))
     if regeln.get("keine_hohlstunden_hard", False):
         for klasse in KLASSEN:
             for tag in TAGE:
-                _add_no_gap_hard(klasse, tag, max_slots=8)
+                _add_no_gap_hard(klasse, tag, teaching_slots_list)
     elif regeln.get("keine_hohlstunden", True):
         for klasse in KLASSEN:
             for tag in TAGE:
-                occ = _occ_vars_for_klasse_tag(klasse, tag, max_slots=8)
+                occ = _occ_vars_for_klasse_tag(klasse, tag, teaching_slots_list)
                 obj_terms += _add_no_gap_soft(occ)
 
     # -------- 6b) Lehrer-Hohlstunden (Soft) --------
     if enforce_teacher_gaps_soft and W_TEACHER_GAPS > 0:
         teacher_index = {name: idx for idx, name in enumerate(LEHRER)}
-        max_day_gaps = min(7, max(0, teacher_gaps_day_max))
-        max_week_gaps = max(0, teacher_gaps_week_max)
+        max_possible_day_gaps = max(0, slots_per_day - 1)
+        max_day_gaps = min(max_possible_day_gaps, max(0, teacher_gaps_day_max))
+        max_possible_week_gaps = len(TAGE) * max_possible_day_gaps
+        max_week_gaps = min(max_possible_week_gaps, max(0, teacher_gaps_week_max))
 
         for lehrer in LEHRER:
             idx = teacher_index[lehrer]
             week_gap_vars = []
             for tag in TAGE:
                 occ = []
-                for std in range(8):
+                for std in slots_range:
                     occ_var = model.NewBoolVar(f"tocc_{idx}_{tag}_{std}")
                     slots = [plan[(fid, tag, std)] for fid in FACH_ID if df.loc[fid, 'Lehrer'] == lehrer]
                     if slots:
@@ -372,7 +409,7 @@ def add_constraints(
                     occ.append(occ_var)
 
                 segment_starts = []
-                for std in range(8):
+                for std in slots_range:
                     start_var = model.NewBoolVar(f"tseg_{idx}_{tag}_{std}")
                     model.Add(start_var <= occ[std])
                     if std == 0:
@@ -382,17 +419,17 @@ def add_constraints(
                         model.Add(start_var >= occ[std] - occ[std - 1])
                     segment_starts.append(start_var)
 
-                segments = model.NewIntVar(0, 8, f"tsegcount_{idx}_{tag}")
+                segments = model.NewIntVar(0, slots_per_day, f"tsegcount_{idx}_{tag}")
                 model.Add(segments == sum(segment_starts))
 
-                total_occ = model.NewIntVar(0, 8, f"tocc_total_{idx}_{tag}")
+                total_occ = model.NewIntVar(0, slots_per_day, f"tocc_total_{idx}_{tag}")
                 model.Add(total_occ == sum(occ))
 
                 has_teaching = model.NewBoolVar(f"tteach_{idx}_{tag}")
                 model.Add(total_occ >= 1).OnlyEnforceIf(has_teaching)
                 model.Add(total_occ == 0).OnlyEnforceIf(has_teaching.Not())
 
-                gaps_var = model.NewIntVar(0, 7, f"tgaps_{idx}_{tag}")
+                gaps_var = model.NewIntVar(0, max_possible_day_gaps, f"tgaps_{idx}_{tag}")
                 model.Add(gaps_var == 0).OnlyEnforceIf(has_teaching.Not())
                 model.Add(segments == 0).OnlyEnforceIf(has_teaching.Not())
                 model.Add(gaps_var + 1 == segments).OnlyEnforceIf(has_teaching)
@@ -400,16 +437,16 @@ def add_constraints(
 
                 week_gap_vars.append(gaps_var)
 
-                excess_day = model.NewIntVar(0, 7, f"tgap_excess_day_{idx}_{tag}")
+                excess_day = model.NewIntVar(0, max_possible_day_gaps, f"tgap_excess_day_{idx}_{tag}")
                 model.Add(excess_day >= gaps_var - max_day_gaps)
                 model.Add(excess_day >= 0)
                 model.Add(excess_day <= gaps_var)
                 obj_terms.append(W_TEACHER_GAPS * excess_day)
 
             if week_gap_vars:
-                week_total = model.NewIntVar(0, len(TAGE) * 7, f"tgap_week_total_{idx}")
+                week_total = model.NewIntVar(0, max_possible_week_gaps, f"tgap_week_total_{idx}")
                 model.Add(week_total == sum(week_gap_vars))
-                excess_week = model.NewIntVar(0, len(TAGE) * 7, f"tgap_excess_week_{idx}")
+                excess_week = model.NewIntVar(0, max_possible_week_gaps, f"tgap_excess_week_{idx}")
                 model.Add(excess_week >= week_total - max_week_gaps)
                 model.Add(excess_week >= 0)
                 model.Add(excess_week <= week_total)
@@ -427,13 +464,15 @@ def add_constraints(
             single_vars = []  # Einzelstunden
 
             for tag in TAGE:
-                stunden = [plan[(fid, tag, s)] for s in range(8)]
+                stunden = [plan[(fid, tag, s)] for s in slots_range]
                 # Nie 3 am Stück
-                for i in range(6):
+                max_triple = max(0, slots_per_day - 2)
+                for i in range(max_triple):
                     model.AddBoolOr([stunden[i].Not(), stunden[i+1].Not(), stunden[i+2].Not()])
 
                 # Paare
-                for s in range(7):
+                max_pair_start = max(0, slots_per_day - 1)
+                for s in range(max_pair_start):
                     pair = model.NewBoolVar(f"pair_{fid}_{tag}_{s}")
                     model.Add(pair <= stunden[s])
                     model.Add(pair <= stunden[s+1])
@@ -441,12 +480,12 @@ def add_constraints(
                     pair_vars.append(pair)
 
                 # Singles
-                for s in range(8):
+                for s in slots_range:
                     single = model.NewBoolVar(f"single_{fid}_{tag}_{s}")
                     model.AddImplication(single, stunden[s])
                     if s > 0:
                         model.AddBoolOr([single.Not(), stunden[s-1].Not()])
-                    if s < 7:
+                    if s < slots_per_day - 1:
                         model.AddBoolOr([single.Not(), stunden[s+1].Not()])
                     single_vars.append(single)
 
@@ -463,14 +502,15 @@ def add_constraints(
                     # Mittige Singles verbieten
                     idx = 0
                     for tag in TAGE:
-                        for s in range(8):
-                            if 1 <= s <= 6:
+                        for s in slots_range:
+                            if 0 < s < slots_per_day - 1:
                                 model.Add(single_vars[idx] == 0)
                             idx += 1
 
                 for tag in TAGE:
-                    stunden = [plan[(fid, tag, s)] for s in range(8)]
-                    for s in range(6):
+                    stunden = [plan[(fid, tag, s)] for s in slots_range]
+                    max_chain = max(0, slots_per_day - 2)
+                    for s in range(max_chain):
                         model.Add(stunden[s] + stunden[s+2] <= stunden[s+1] + 1)
 
             elif ds_rule == "nein":
@@ -483,73 +523,118 @@ def add_constraints(
                     model.Add(sum(pair_vars) <= max_pairs)
 
                 # Einzelstunden bevorzugen (Soft)
-                W_EINZEL_KANN = int(regeln.get("W_EINZEL_KANN", 5))
-                single_total = sum(single_vars)
-                pair_total = sum(pair_vars)
-                obj_terms.append(W_EINZEL_KANN * (pair_total * 2 - single_total))
+                if W_EINZEL_KANN > 0:
+                    single_total = sum(single_vars)
+                    pair_total = sum(pair_vars)
+                    obj_terms.append(W_EINZEL_KANN * (pair_total * 2 - single_total))
+
+            elif ds_rule == "soll":
+                max_pairs = anzahl_stunden // 2
+                if pair_vars and max_pairs > 0:
+                    missing_pairs = model.NewIntVar(0, max_pairs, f"dsmiss_{fid}")
+                    model.Add(missing_pairs >= max_pairs - sum(pair_vars))
+                    model.Add(missing_pairs >= 0)
+                    model.Add(missing_pairs <= max_pairs)
+                    if W_EINZEL_SOLL > 0:
+                        obj_terms.append(W_EINZEL_SOLL * missing_pairs)
+
+                if W_EINZEL_SOLL > 0:
+                    allowed_single = anzahl_stunden % 2
+                    max_single = len(single_vars)
+                    extra_single = model.NewIntVar(0, max_single, f"dsextra_{fid}")
+                    model.Add(extra_single >= sum(single_vars) - allowed_single)
+                    model.Add(extra_single >= 0)
+                    model.Add(extra_single <= max_single)
+                    obj_terms.append(W_EINZEL_SOLL * extra_single)
 
         # Begrenze Alias-Fächer (z.B. Deutsch + Leseband) auf max. 2 Slots pro Tag
-        canonical_map: dict[tuple[str, int | None], list[int]] = {}
+        canonical_map: dict[tuple[str, str], list[int]] = {}
         for fid in FACH_ID:
             canonical_id, canonical_name = fid_canonical_subject.get(fid, (None, str(df.loc[fid, 'Fach'])))
-            if canonical_id is None:
+            klasse = str(df.loc[fid, 'Klasse'])
+            key: tuple[str, str] | None = None
+            if canonical_id is not None:
+                key = (klasse, f"id:{canonical_id}")
+            elif canonical_name:
+                key = (klasse, f"name:{canonical_name.strip().lower()}")
+            if key is None:
                 continue
-            key = (str(df.loc[fid, 'Klasse']), canonical_id)
             canonical_map.setdefault(key, []).append(fid)
 
         for (klasse, _canon), fid_list in canonical_map.items():
             if len(fid_list) <= 1:
                 continue
             for tag in TAGE:
-                total = sum(plan[(fid, tag, std)] for fid in fid_list for std in range(8))
+                total = sum(plan[(fid, tag, std)] for fid in fid_list for std in slots_range)
                 model.Add(total <= 2)
 
     # -------- 7) Nachmittag je Fach ('muss/kann/nein') --------
     if 'Nachmittag' in df.columns and enforce_subject_afternoon:
+        morning_indices = [idx for idx in teaching_slots if idx < 6]
+        afternoon_indices = [idx for idx in teaching_slots if idx >= 6]
         for fid in FACH_ID:
             nm_rule = _str_val(df.loc[fid], "Nachmittag", default="kann")
             if nm_rule == "muss":
                 anzahl = int(df.loc[fid, "Wochenstunden"])
-                # Vormittag überall 0
-                for tag in TAGE:
-                    for std in range(6):
-                        model.Add(plan[(fid, tag, std)] == 0)
-                # Nur Dienstag 7/8 summieren
-                model.Add(sum([plan[(fid, 'Di', s)] for s in (6, 7)]) == anzahl)
+                if morning_indices:
+                    for tag in TAGE:
+                        for std in morning_indices:
+                            key = (fid, tag, std)
+                            if key in plan:
+                                model.Add(plan[key] == 0)
+                if afternoon_indices:
+                    total_afternoon = []
+                    for tag in TAGE:
+                        for std in afternoon_indices:
+                            key = (fid, tag, std)
+                            if key in plan:
+                                total_afternoon.append(plan[key])
+                    if total_afternoon:
+                        model.Add(sum(total_afternoon) == anzahl)
             elif nm_rule == "nein":
                 for tag in TAGE:
-                    for std in (6, 7):
-                        model.Add(plan[(fid, tag, std)] == 0)
+                    for std in afternoon_indices:
+                        key = (fid, tag, std)
+                        if key in plan:
+                            model.Add(plan[key] == 0)
             # 'kann' -> keine Extra-Einschränkung (global gilt ggf. 4) )
 
     # -------- 8) Vormittagsminimum je Klasse/Tag (mind. 4 Stunden) --------
     if enforce_midday_rule:
+        vormittag_indices = teaching_slots[:min(6, len(teaching_slots))]
         for klasse in KLASSEN:
             for tag in TAGE:
                 vormittag = [plan[(fid, tag, s)]
-                             for fid in FACH_ID for s in range(6)
+                             for fid in FACH_ID for s in vormittag_indices
                              if str(df.loc[fid, 'Klasse']) == str(klasse)]
                 if vormittag:
                     model.Add(sum(vormittag) >= 4)
 
     # -------- 9) Freie 6. Stunde, wenn Nachmittag stattfindet --------
     if enforce_afternoon_break:
-        for klasse in KLASSEN:
-            for tag in TAGE:
-                nachmittag = [plan[(fid, tag, s)]
-                              for fid in FACH_ID for s in (6, 7)
-                              if str(df.loc[fid, 'Klasse']) == str(klasse)]
-                if not nachmittag:
-                    continue
-                sechste = [plan[(fid, tag, 5)]
-                           for fid in FACH_ID
-                           if str(df.loc[fid, 'Klasse']) == str(klasse)]
-                if not sechste:
-                    continue
-                hat_nachmittag = model.NewBoolVar(f"nachmittag_{klasse}_{tag}")
-                model.Add(sum(nachmittag) >= 1).OnlyEnforceIf(hat_nachmittag)
-                model.Add(sum(nachmittag) == 0).OnlyEnforceIf(hat_nachmittag.Not())
-                model.Add(sum(sechste) == 0).OnlyEnforceIf(hat_nachmittag)
+        if len(teaching_slots) >= 6:
+            sixth_slot_index = teaching_slots[5]
+            afternoon_indices = [idx for idx in teaching_slots if idx > sixth_slot_index]
+        else:
+            sixth_slot_index = None
+            afternoon_indices = []
+        if afternoon_indices and sixth_slot_index is not None:
+            for klasse in KLASSEN:
+                for tag in TAGE:
+                    nachmittag = [plan[(fid, tag, s)]
+                                  for fid in FACH_ID for s in afternoon_indices
+                                  if str(df.loc[fid, 'Klasse']) == str(klasse)]
+                    if not nachmittag:
+                        continue
+                    sechste = [plan[(fid, tag, sixth_slot_index)]
+                               for fid in FACH_ID
+                               if str(df.loc[fid, 'Klasse']) == str(klasse)]
+                    if not sechste:
+                        continue
+                    hat_nachmittag = model.NewBoolVar(f"nachmittag_{klasse}_{tag}")
+                    model.Add(sum(nachmittag) >= 1).OnlyEnforceIf(hat_nachmittag)
+                    model.Add(sum(nachmittag) == 0).OnlyEnforceIf(hat_nachmittag.Not())
+                    model.Add(sum(sechste) == 0).OnlyEnforceIf(hat_nachmittag)
 
     # -------- 10) Basisplan-Overrides (fix & flexibel) --------
     if enforce_fixed_slots:
@@ -561,6 +646,7 @@ def add_constraints(
 
     if enforce_flexible_slots:
         flexible_groups = flexible_groups or []
+        fid_allowed_slots: dict[int, set[tuple[str, int]]] = {}
         for entry in flexible_groups:
             if not isinstance(entry, dict):
                 continue
@@ -568,13 +654,26 @@ def add_constraints(
             slots = entry.get("slots")
             if fid is None or not isinstance(slots, list):
                 continue
-            literals = []
+            allowed = fid_allowed_slots.setdefault(int(fid), set())
             for tag, std in slots:
                 key = (fid, tag, std)
                 if key in plan:
-                    literals.append(plan[key])
-            if literals:
-                model.Add(sum(literals) == 1)
+                    allowed.add((tag, std))
+        for fid, allowed in fid_allowed_slots.items():
+            for tag in TAGE:
+                for std in slots_range:
+                    if std in pause_slots:
+                        key = (fid, tag, std)
+                        if key in plan:
+                            model.Add(plan[key] == 0)
+                        continue
+                    key = (fid, tag, std)
+                    if key not in plan:
+                        continue
+                    if (tag, std) not in allowed:
+                        model.Add(plan[key] == 0)
+        # If a requirement was marked as flexible but without a slot list,
+        # we simply fall back to the global placement rules.
 
     # -------- 11) Bandfächer parallel (gleiche Slots je Fach) --------
     if enforce_band_parallel and "Bandfach" in df.columns:
@@ -604,18 +703,22 @@ def add_constraints(
             tage_required = hours[0]
             if tage_required <= 0:
                 continue
-            add_band_constraint(
+            penalty = add_band_constraint(
                 model,
                 plan,
                 df,
                 TAGE,
+                slots_range,
                 subject_name,
                 mandatory_fids,
                 optional_fids,
                 optional_classes,
                 class_fids,
+                W_BAND_OPTIONAL,
                 tage=tage_required,
             )
+            if penalty is not None:
+                obj_terms.append(penalty)
             # Optional: Modelle mit unterschiedlichen Wochenstunden ignorieren einfach;
             # Debug lässt sich über Solver-Logs nachvollziehen.
 
@@ -625,9 +728,9 @@ def add_constraints(
         for klasse in KLASSEN:
             for tag in TAGE:
                 belegte = [plan[(fid, tag, s)]
-                           for fid in FACH_ID for s in range(8)
+                           for fid in FACH_ID for s in slots_range
                            if str(df.loc[fid, 'Klasse']) == str(klasse)]
-                var = model.NewIntVar(0, 8, f"stunden_{klasse}_{tag}")
+                var = model.NewIntVar(0, slots_per_day, f"stunden_{klasse}_{tag}")
                 model.Add(var == sum(belegte))
                 belegte_stunden_klasse_tag[(klasse, tag)] = var
 
@@ -637,7 +740,7 @@ def add_constraints(
                                 if str(df.loc[fid, 'Klasse']) == str(klasse))
             avg = wochenstunden // len(TAGE)
             for tag in TAGE:
-                diff = model.NewIntVar(0, 8, f"abweichung_{klasse}_{tag}")
+                diff = model.NewIntVar(0, slots_per_day, f"abweichung_{klasse}_{tag}")
                 model.AddAbsEquality(diff, belegte_stunden_klasse_tag[(klasse, tag)] - avg)
                 obj_terms.append(W_EVEN_DIST * diff)
 
@@ -646,7 +749,7 @@ def add_constraints(
         model.Minimize(sum(obj_terms))
 
 
-def add_band_constraint(model, plan, df, TAGE, band_fach, mandatory_fids, optional_fids, optional_classes, class_fids, tage=2):
+def add_band_constraint(model, plan, df, TAGE, slots_range, band_fach, mandatory_fids, optional_fids, optional_classes, class_fids, weight_optional, tage=2):
     """
     Bandfach exakt 'tage' mal pro Woche,
     immer parallel in allen Klassen (gleicher Tag+Stunde).
@@ -659,7 +762,7 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, mandatory_fids, option
     parallel_slots = []
     slots_by_day: dict[str, list[cp_model.IntVar]] = {tag: [] for tag in TAGE}
     for tag in TAGE:
-        for std in range(8):
+        for std in slots_range:
             slot_vars = [plan[(fid, tag, std)] for fid in mandatory_fids]
             parallel = model.NewBoolVar(f"{band_fach}_parallel_{tag}_{std}")
             for v in slot_vars:
@@ -679,6 +782,17 @@ def add_band_constraint(model, plan, df, TAGE, band_fach, mandatory_fids, option
             model.Add(sum(literals) <= 1)
 
     for fid in mandatory_fids:
-        model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) == tage)
+        model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in slots_range) == tage)
+    optional_flags = []
     for fid in optional_fids:
-        model.Add(sum(plan[(fid, tag, std)] for tag in TAGE for std in range(8)) <= tage)
+        total = sum(plan[(fid, tag, std)] for tag in TAGE for std in slots_range)
+        assigned = model.NewBoolVar(f"band_optional_{fid}")
+        model.Add(total >= assigned)
+        model.Add(total <= tage * assigned)
+        optional_flags.append(assigned)
+
+    penalty_expr = None
+    if weight_optional > 0 and optional_flags:
+        penalty_expr = weight_optional * (len(optional_flags) - sum(optional_flags))
+
+    return penalty_expr

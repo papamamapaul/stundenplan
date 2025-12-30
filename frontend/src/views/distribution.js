@@ -6,23 +6,35 @@ import { fetchRooms } from '../api/rooms.js';
 import { fetchVersions, createVersion, updateVersion, deleteVersion } from '../api/versions.js';
 import { fetchRequirements, createRequirement, updateRequirement, deleteRequirement } from '../api/requirements.js';
 import { confirmModal, formModal, formatError } from '../utils/ui.js';
+import { getActivePlanningPeriod } from '../store/planningPeriods.js';
+import { createTeacherBadge } from '../components/TeacherBadge.js';
+import { createIcon, ICONS } from '../components/icons.js';
 
 export function createDistributionView() {
   const container = document.createElement('section');
   container.className = 'space-y-6';
 
-  container.innerHTML = `
-    <div class="space-y-1">
-      <h1 class="text-2xl font-semibold">Stundenverteilung</h1>
-      <p class="text-sm opacity-70">Verteile die Wochenstunden auf Lehrkräfte und verwalte verschiedene Varianten.</p>
-    </div>
+  const header = document.createElement('div');
+  header.className = 'space-y-1';
+  header.innerHTML = `
+    <h1 class="text-2xl font-semibold text-gray-900">Stundenverteilung</h1>
+    <p class="text-sm text-gray-600">Verteile die Wochenstunden auf Lehrkräfte und verwalte verschiedene Varianten.</p>
   `;
+  const periodInfo = document.createElement('p');
+  periodInfo.className = 'text-xs text-gray-500';
+  const activePeriod = getActivePlanningPeriod();
+  periodInfo.textContent = activePeriod
+    ? `Aktive Planungsperiode: ${activePeriod.name}`
+    : 'Keine Planungsperiode ausgewählt.';
+  header.appendChild(periodInfo);
+  container.appendChild(header);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'flex flex-wrap items-center gap-3';
 
   const createBtn = document.createElement('button');
-  createBtn.className = 'btn btn-primary';
+  createBtn.type = 'button';
+  createBtn.className = 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
   createBtn.textContent = 'Neue Stundenverteilung anlegen';
   toolbar.appendChild(createBtn);
   container.appendChild(toolbar);
@@ -44,15 +56,17 @@ export function createDistributionView() {
   const state = {
     versions: [],
     selectedVersionId: null,
+    selectedTeacherId: null,
     teachers: [],
     classes: [],
     subjects: [],
     curriculum: [],
     requirements: [],
     loading: false,
-    collapsedTeachers: new Set(),
+    collapsedClasses: new Set(),
     teacherSort: 'name',
     showOnlyWithCapacity: false,
+    teacherSearchTerm: '',
     rooms: [],
   };
 
@@ -64,6 +78,7 @@ export function createDistributionView() {
 
 const DOPPEL_OPTIONS = [
   { value: 'muss', label: 'Muss Doppelstunde' },
+  { value: 'soll', label: 'Soll Doppelstunde' },
   { value: 'kann', label: 'Darf Einzelstunde' },
   { value: 'nein', label: 'Nur Einzelstunden' },
 ];
@@ -143,9 +158,12 @@ function labelForOption(options, value) {
       }));
       state.versions = versions;
       state.rooms = rooms;
-      state.collapsedTeachers = new Set(
-        [...state.collapsedTeachers].filter(id => teachers.some(t => t.id === id))
+      state.collapsedClasses = new Set(
+        [...state.collapsedClasses].filter(id => classes.some(c => c.id === id))
       );
+      if (state.selectedTeacherId && !teachers.some(t => t.id === state.selectedTeacherId)) {
+        state.selectedTeacherId = null;
+      }
 
       maps.classes = new Map(classes.map(item => [item.id, item]));
       maps.subjects = new Map(subjects.map(item => [item.id, item]));
@@ -168,13 +186,14 @@ function labelForOption(options, value) {
 
   function createEmptyState() {
     const wrap = document.createElement('div');
-    wrap.className = 'card bg-base-100 shadow';
-    wrap.innerHTML = `
-      <div class="card-body items-center text-center space-y-3">
-        <h2 class="card-title">Noch keine Stundenverteilung vorhanden</h2>
-        <p class="text-sm opacity-70">Lege eine neue Version an, um mit der Verteilung zu starten.</p>
-      </div>
-    `;
+    wrap.className = 'rounded-xl border border-dashed border-gray-300 bg-white p-6 text-center shadow-sm';
+    const title = document.createElement('h2');
+    title.className = 'text-lg font-semibold text-gray-900';
+    title.textContent = 'Noch keine Stundenverteilung vorhanden';
+    const message = document.createElement('p');
+    message.className = 'mt-2 text-sm text-gray-500';
+    message.textContent = 'Lege eine neue Version an, um mit der Verteilung zu starten.';
+    wrap.append(title, message);
     return wrap;
   }
 
@@ -200,12 +219,15 @@ function labelForOption(options, value) {
     versionsSection.innerHTML = '';
     const heading = document.createElement('div');
     heading.className = 'flex items-center justify-between';
-    heading.innerHTML = '<h2 class="text-lg font-semibold">Versionen</h2>';
+    const headingTitle = document.createElement('h2');
+    headingTitle.className = 'text-lg font-semibold text-gray-900';
+    headingTitle.textContent = 'Versionen';
+    heading.appendChild(headingTitle);
     versionsSection.appendChild(heading);
 
     if (!state.versions.length) {
       const empty = document.createElement('p');
-      empty.className = 'text-sm opacity-70';
+      empty.className = 'text-sm text-gray-500';
       empty.textContent = 'Noch keine Versionen vorhanden.';
       versionsSection.appendChild(empty);
       return;
@@ -213,55 +235,71 @@ function labelForOption(options, value) {
 
     const list = document.createElement('div');
     list.className = 'grid gap-3 md:grid-cols-2 xl:grid-cols-3';
+    versionsSection.appendChild(list);
 
     state.versions.forEach(version => {
-      const card = document.createElement('article');
       const active = version.id === state.selectedVersionId;
-      card.className = `card bg-base-100 border shadow-sm transition hover:shadow-md ${active ? 'border-primary' : 'border-base-200'}`;
+      const card = document.createElement('article');
+      card.className = [
+        'rounded-xl border transition-shadow',
+        active ? 'border-blue-500 bg-blue-50 shadow-md' : 'border-gray-200 bg-white shadow-sm hover:shadow-md',
+      ].join(' ');
 
       const body = document.createElement('div');
-      body.className = 'card-body space-y-3';
+      body.className = 'p-4 flex flex-col gap-3';
+      card.appendChild(body);
 
       const titleRow = document.createElement('div');
       titleRow.className = 'flex items-start justify-between gap-3';
+      body.appendChild(titleRow);
 
       const titleBlock = document.createElement('div');
-      titleBlock.innerHTML = `
-        <h3 class="card-title">${version.name}</h3>
-        ${version.comment ? `<p class="text-sm opacity-70">${version.comment}</p>` : ''}
-      `;
+      const titleEl = document.createElement('h3');
+      titleEl.className = 'text-sm font-semibold text-gray-900';
+      titleEl.textContent = version.name;
+      titleBlock.appendChild(titleEl);
+      if (version.comment) {
+        const commentEl = document.createElement('p');
+        commentEl.className = 'mt-1 text-xs text-gray-500';
+        commentEl.textContent = version.comment;
+        titleBlock.appendChild(commentEl);
+      }
+      titleRow.appendChild(titleBlock);
 
       const actionWrap = document.createElement('div');
       actionWrap.className = 'flex items-center gap-2';
 
       const editBtn = document.createElement('button');
       editBtn.type = 'button';
-      editBtn.className = 'btn btn-ghost btn-xs';
+      editBtn.className = 'inline-flex items-center px-2.5 py-1 text-xs font-medium text-gray-600 border border-gray-200 rounded-md hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
       editBtn.textContent = 'Bearbeiten';
 
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
-      deleteBtn.className = 'btn btn-ghost btn-xs text-error';
+      deleteBtn.className = 'inline-flex items-center px-2.5 py-1 text-xs font-medium text-red-600 border border-red-200 rounded-md hover:text-red-700 hover:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-1';
       deleteBtn.textContent = 'Löschen';
 
       actionWrap.append(editBtn, deleteBtn);
-      titleRow.append(titleBlock, actionWrap);
+      titleRow.appendChild(actionWrap);
 
       const meta = document.createElement('div');
-      meta.className = 'flex items-center justify-between text-xs opacity-70';
+      meta.className = 'flex items-center justify-between text-xs text-gray-500';
       const versionIdLabel = document.createElement('span');
       versionIdLabel.textContent = `#${version.id}`;
       const dateLabel = document.createElement('span');
       dateLabel.textContent = formatDate(version.updated_at || version.created_at);
       meta.append(versionIdLabel, dateLabel);
+      body.appendChild(meta);
 
       const selectBtn = document.createElement('button');
       selectBtn.type = 'button';
-      selectBtn.className = `btn btn-sm ${active ? 'btn-primary' : 'btn-outline'}`;
+      selectBtn.className = [
+        'inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold rounded-md focus:outline-none focus:ring-2 focus:ring-offset-1',
+        active ? 'bg-blue-600 text-white hover:bg-blue-500 focus:ring-blue-500' : 'border border-gray-200 text-gray-700 hover:text-gray-900 hover:border-gray-300 focus:ring-blue-500',
+      ].join(' ');
       selectBtn.textContent = active ? 'Aktiv' : 'Auswählen';
+      body.appendChild(selectBtn);
 
-      body.append(titleRow, meta, selectBtn);
-      card.appendChild(body);
       list.appendChild(card);
 
       selectBtn.addEventListener('click', async () => {
@@ -322,8 +360,6 @@ function labelForOption(options, value) {
         }
       });
     });
-
-    versionsSection.appendChild(list);
   }
 
   function renderBoard() {
@@ -335,570 +371,836 @@ function labelForOption(options, value) {
     }
 
     const remainingMap = computeRemainingMap();
-    const remainingCache = new Map();
-    remainingMap.forEach((value, key) => {
-      remainingCache.set(key, { ...value });
-    });
-    const assignments = groupAssignmentsByTeacher();
-    const teacherLoads = computeTeacherLoads(assignments);
+    const assignmentsByTeacher = groupAssignmentsByTeacher();
+    const teacherLoads = computeTeacherLoads(assignmentsByTeacher);
+    const classSubjectAssignments = groupAssignmentsByClassSubject(assignmentsByTeacher);
 
-    function canAcceptAssignmentMove(targetTeacherId, payload, loads) {
-    if (!payload || payload.kind !== 'assignment') return false;
-    if (payload.teacherId === targetTeacherId) return false;
-    const sourceRecords = state.requirements.filter(req =>
-      req.version_id === state.selectedVersionId &&
-      req.teacher_id === payload.teacherId &&
-      req.class_id === payload.classId &&
-      req.subject_id === payload.subjectId
+    const totals = Array.from(remainingMap.values()).reduce(
+      (acc, info) => {
+        const total = Number(info.total || 0);
+        const remaining = Math.max(0, Number(info.remaining || 0));
+        acc.total += total;
+        acc.remaining += remaining;
+        return acc;
+      },
+      { total: 0, remaining: 0 }
     );
-    if (!sourceRecords.length) return false;
-    const load = loads.get(targetTeacherId);
-    if (!load) return true;
-    if (!Number.isFinite(load.limit)) return true;
-    const totalMove = typeof payload.count === 'number' && payload.count > 0
-      ? payload.count
-      : sourceRecords.reduce((sum, rec) => sum + (rec.wochenstunden || 0), 0);
-    return load.used + totalMove <= load.limit;
-  }
+    const assignedHours = Math.max(0, totals.total - totals.remaining);
 
-    const board = document.createElement('div');
-    board.className = 'grid gap-6 lg:grid-cols-[minmax(260px,320px)_1fr]';
+    const layout = document.createElement('div');
+    layout.className = 'flex flex-col gap-4 xl:flex-row xl:items-stretch';
 
-    const palette = document.createElement('div');
-    palette.className = 'space-y-4';
-
-    const paletteHeader = document.createElement('div');
-    paletteHeader.className = 'flex items-center justify-between gap-3';
-
-    const paletteTitle = document.createElement('h3');
-    paletteTitle.className = 'text-lg font-semibold';
-    paletteTitle.textContent = 'Fächer-Palette';
-
-    const totalIndicator = document.createElement('span');
-    totalIndicator.className = 'badge badge-outline';
-    totalIndicator.textContent = `${countRemainingHours(remainingMap)} Stunden offen`;
-
-    const paletteScroller = document.createElement('div');
-    paletteScroller.className = 'overflow-x-auto pb-2';
-    const paletteRow = document.createElement('div');
-    paletteRow.className = 'flex gap-4 min-w-fit';
-
-    paletteHeader.append(paletteTitle, totalIndicator);
-    palette.append(paletteHeader, paletteScroller);
-    paletteScroller.appendChild(paletteRow);
-
-    const paletteBadges = new Map();
-    const classCards = new Map();
-
-    const groupedRemaining = new Map();
-    remainingMap.forEach(info => {
-      if (!info || !info.remaining || info.remaining <= 0) return;
-      const classId = info.classId;
-      const list = groupedRemaining.get(classId) ?? [];
-      list.push(info);
-      groupedRemaining.set(classId, list);
-    });
-
-    const classesToShow = computePaletteClassOrder(groupedRemaining);
-
-    const showPaletteEmpty = () => {
-      paletteRow.innerHTML = '';
-      const empty = document.createElement('div');
-      empty.dataset.paletteEmpty = 'true';
-      empty.className = 'alert alert-success text-sm min-w-[260px]';
-      empty.textContent = 'Alle Stunden sind verteilt.';
-      paletteRow.appendChild(empty);
-    };
-
-    const clearPaletteEmpty = () => {
-      const empty = paletteRow.querySelector('[data-palette-empty]');
-      if (empty) empty.remove();
-    };
-
-    if (!classesToShow.length) {
-      showPaletteEmpty();
-    } else {
-      clearPaletteEmpty();
+    layout.appendChild(renderTeacherPanel());
+    layout.appendChild(renderSubjectPanel());
+    const detailsPanel = renderTeacherDetailsPanel();
+    if (detailsPanel) {
+      layout.appendChild(detailsPanel);
     }
 
-    classesToShow.forEach(cls => {
-      const remainingList = groupedRemaining.get(cls.id) || [];
-      if (!remainingList.length) return;
+    boardSection.appendChild(layout);
 
-      remainingList.sort((a, b) => {
-        const subA = maps.subjects.get(a.subjectId);
-        const subB = maps.subjects.get(b.subjectId);
-        return (subA?.name || '').localeCompare(subB?.name || '');
-      });
-
-      const classMeta = maps.classes.get(cls.id) || { id: cls.id };
-      const card = document.createElement('article');
-      card.className = 'card bg-base-100 border border-base-200 shadow-sm min-w-[280px]';
-
-      const body = document.createElement('div');
-      body.className = 'card-body space-y-4';
+    function renderTeacherPanel() {
+      const panel = document.createElement('aside');
+      panel.className = 'xl:w-80 w-full bg-white border border-gray-200 rounded-xl flex flex-col shadow-sm';
 
       const header = document.createElement('div');
-      header.className = 'flex items-center justify-between gap-2';
-      const title = document.createElement('h4');
-      title.className = 'font-semibold text-sm';
-      title.textContent = formatClassLabel(classMeta);
-      const count = remainingList.reduce((sum, info) => sum + (info.remaining || 0), 0);
-      const badge = document.createElement('span');
-      badge.className = 'badge badge-outline badge-sm';
-      badge.textContent = `${count} h offen`;
-      header.append(title, badge);
+      header.className = 'p-4 border-b border-gray-200 space-y-4 bg-white';
 
-      const pillWrap = document.createElement('div');
-      pillWrap.className = 'flex flex-wrap gap-2';
-      const classEntry = { card, badge, pillWrap, remaining: count };
-      classCards.set(cls.id, classEntry);
+      const titleRow = document.createElement('div');
+      titleRow.className = 'flex items-center justify-between gap-2';
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'flex items-center gap-2 text-sm font-semibold text-gray-900';
+      const userIcon = createIcon(ICONS.USER, { size: 16 });
+      userIcon.classList.add('text-gray-500');
+      titleWrap.append(userIcon, document.createTextNode('Lehrkräfte'));
+      const count = document.createElement('span');
+      count.className = 'text-xs text-gray-500';
+      count.textContent = `${state.teachers.length} Personen`;
+      titleRow.append(titleWrap, count);
 
-      remainingList.forEach(info => {
-        const subject = maps.subjects.get(info.subjectId);
+      const searchWrap = document.createElement('div');
+      searchWrap.className = 'relative';
 
-        const pill = document.createElement('span');
-        pill.className = 'inline-flex items-center gap-3 rounded-lg border bg-base-100 px-3 py-2 cursor-grab active:cursor-grabbing shadow-sm max-w-full';
-        if (subject?.color) pill.style.borderColor = subject.color;
-        pill.draggable = true;
-        pill.dataset.key = `${info.classId}|${info.subjectId}`;
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'flex flex-col leading-tight text-left';
-        const subjectRow = document.createElement('span');
-        subjectRow.className = 'flex items-center gap-2';
-        const subjectLabel = document.createElement('span');
-        subjectLabel.className = 'font-semibold text-xs';
-        subjectLabel.textContent = formatSubjectLabel(subject);
-        const countBadge = document.createElement('span');
-        countBadge.className = 'badge badge-sm badge-primary';
-        countBadge.textContent = String(info.remaining);
-        subjectRow.append(subjectLabel, countBadge);
-        const classLabel = document.createElement('span');
-        classLabel.className = 'text-[11px] opacity-70';
-        classLabel.textContent = formatClassLabel(classMeta);
-        labelWrap.append(subjectRow, classLabel);
-
-        pill.append(labelWrap);
-
-        pill.addEventListener('dragstart', event => {
-          currentDragPayload = {
-            kind: 'palette',
-            classId: info.classId,
-            subjectId: info.subjectId,
-            count: info.remaining || 1,
-          };
-          event.dataTransfer.effectAllowed = 'copy';
-          const payload = JSON.stringify(currentDragPayload);
-          event.dataTransfer.setData('application/json', payload);
-          event.dataTransfer.setData('text/plain', payload);
-        });
-
-        pill.addEventListener('dragend', () => {
-          currentDragPayload = null;
-        });
-
-        pillWrap.appendChild(pill);
-        paletteBadges.set(`${info.classId}|${info.subjectId}`, {
-          badge: countBadge,
-          pill,
-          classId: cls.id,
-        });
+      const searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.value = state.teacherSearchTerm || '';
+      searchInput.placeholder = 'Lehrkraft suchen…';
+      searchInput.className = 'w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent';
+      searchInput.addEventListener('input', () => {
+        state.teacherSearchTerm = searchInput.value;
+        renderTeacherCards();
       });
 
-      body.append(header, pillWrap);
-      card.appendChild(body);
-      paletteRow.appendChild(card);
-    });
+      const searchIcon = createIcon(ICONS.SEARCH, { size: 16 });
+      searchIcon.classList.add('absolute', 'left-3', 'top-1/2', '-translate-y-1/2', 'text-gray-400', 'pointer-events-none');
+      searchWrap.append(searchIcon, searchInput);
 
-    if (!classesToShow.length) {
-      showPaletteEmpty();
-    }
+      const controlsRow = document.createElement('div');
+      controlsRow.className = 'flex flex-wrap items-center gap-2';
 
-    palette.appendChild(paletteScroller);
-    if (!classesToShow.length) {
-      const empty = document.createElement('div');
-      empty.className = 'alert alert-success text-sm';
-      empty.textContent = 'Alle Stunden sind verteilt.';
-      paletteRow.appendChild(empty);
-    }
-
-    board.appendChild(palette);
-    const teacherColumn = document.createElement('div');
-    teacherColumn.className = 'space-y-4';
-
-    const controls = document.createElement('div');
-    controls.className = 'flex flex-wrap items-center justify-between gap-2';
-
-    const primaryControls = document.createElement('div');
-    primaryControls.className = 'flex items-center gap-2';
-
-    const sortBtn = document.createElement('button');
-    sortBtn.type = 'button';
-    sortBtn.className = 'btn btn-xs btn-outline';
-    sortBtn.textContent = state.teacherSort === 'name' ? 'Sortierung: A–Z' : 'Sortierung: Reststunden';
-    sortBtn.addEventListener('click', () => {
-      state.teacherSort = state.teacherSort === 'name' ? 'remaining' : 'name';
-      renderBoard();
-    });
-
-    const filterBtn = document.createElement('button');
-    filterBtn.type = 'button';
-    filterBtn.className = `btn btn-xs ${state.showOnlyWithCapacity ? 'btn-primary' : 'btn-outline'}`;
-    filterBtn.textContent = 'Nur freie';
-    filterBtn.addEventListener('click', () => {
-      state.showOnlyWithCapacity = !state.showOnlyWithCapacity;
-      renderBoard();
-    });
-
-    primaryControls.append(sortBtn, filterBtn);
-
-    const collapseAllBtn = document.createElement('button');
-    collapseAllBtn.type = 'button';
-    collapseAllBtn.className = 'btn btn-xs btn-ghost';
-
-    controls.append(primaryControls, collapseAllBtn);
-    teacherColumn.appendChild(controls);
-
-    let teachersList = state.teachers.slice();
-    if (state.showOnlyWithCapacity) {
-      teachersList = teachersList.filter(teacher => {
-        const load = teacherLoads.get(teacher.id) ?? { used: 0, limit: getTeacherLimit(teacher) };
-        const remainingCapacity = Number.isFinite(load.limit) ? load.limit - load.used : Infinity;
-        return remainingCapacity > 0 || !Number.isFinite(load.limit);
+      const sortBtn = document.createElement('button');
+      sortBtn.type = 'button';
+      sortBtn.className = 'flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
+      sortBtn.textContent = state.teacherSort === 'name' ? 'Sortierung: A–Z' : 'Sortierung: Reststunden';
+      sortBtn.addEventListener('click', () => {
+        state.teacherSort = state.teacherSort === 'name' ? 'remaining' : 'name';
+        renderBoard();
       });
-    }
 
-    if (state.teacherSort === 'remaining') {
-      teachersList.sort((a, b) => {
-        const loadA = teacherLoads.get(a.id) ?? { used: 0, limit: getTeacherLimit(a) };
-        const loadB = teacherLoads.get(b.id) ?? { used: 0, limit: getTeacherLimit(b) };
-        const remA = Number.isFinite(loadA.limit) ? loadA.limit - loadA.used : Infinity;
-        const remB = Number.isFinite(loadB.limit) ? loadB.limit - loadB.used : Infinity;
-        if (remA === remB) return (a.name || '').localeCompare(b.name || '');
-        return remB - remA;
+      const capacityBtn = document.createElement('button');
+      capacityBtn.type = 'button';
+      capacityBtn.className = [
+        'flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+        state.showOnlyWithCapacity
+          ? 'bg-blue-600 text-white hover:bg-blue-500 border border-blue-600'
+          : 'text-gray-600 border border-gray-200 hover:text-gray-900 hover:border-gray-300',
+      ].join(' ');
+      const filterIcon = createIcon(ICONS.FILTER, { size: 14 });
+      filterIcon.classList.add('text-current');
+      capacityBtn.append(filterIcon, document.createTextNode(state.showOnlyWithCapacity ? 'Nur freie' : 'Alle Lehrkräfte'));
+      capacityBtn.addEventListener('click', () => {
+        state.showOnlyWithCapacity = !state.showOnlyWithCapacity;
+        renderBoard();
       });
-    } else {
-      teachersList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    }
 
-    const allVisibleCollapsed = teachersList.length > 0 && teachersList.every(t => isTeacherCollapsed(t.id));
-    collapseAllBtn.textContent = allVisibleCollapsed ? 'Alle aufklappen' : 'Alle minimieren';
-    collapseAllBtn.disabled = teachersList.length === 0;
-    collapseAllBtn.addEventListener('click', () => {
-      teachersList.forEach(t => setTeacherCollapsed(t.id, !allVisibleCollapsed));
-      renderBoard();
-    });
+      controlsRow.append(sortBtn, capacityBtn);
 
-    if (!teachersList.length) {
-      const empty = document.createElement('div');
-      empty.className = 'alert alert-info text-sm';
-      empty.textContent = state.showOnlyWithCapacity
-        ? 'Alle Lehrkräfte sind bereits voll eingeplant.'
-        : 'Keine Lehrkräfte vorhanden.';
-      teacherColumn.appendChild(empty);
-    } else {
-      const teacherScroller = document.createElement('div');
-      teacherScroller.className = 'overflow-x-auto';
-      const teachersWrap = document.createElement('div');
-      teachersWrap.className = 'flex gap-4 min-w-fit';
+      header.append(titleRow, searchWrap, controlsRow);
+      panel.appendChild(header);
 
-      teachersList.forEach(teacher => {
-        const load = teacherLoads.get(teacher.id) ?? { used: 0, limit: getTeacherLimit(teacher) };
-        const remainingCapacity = Number.isFinite(load.limit) ? Math.max(0, load.limit - load.used) : Infinity;
-        const collapsed = isTeacherCollapsed(teacher.id);
-        const teacherAssignments = assignments.get(teacher.id);
-        const assignedSubjects = teacherAssignments ? teacherAssignments.size : 0;
+      const listContainer = document.createElement('div');
+      listContainer.className = 'flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50';
+      panel.appendChild(listContainer);
 
-        const teacherCard = document.createElement('article');
-        teacherCard.className = 'card bg-base-100 border border-base-200 shadow-sm transition min-w-[320px]';
-        teacherCard.dataset.teacherId = String(teacher.id);
-        if (remainingCapacity <= 0 && Number.isFinite(load.limit)) {
-          teacherCard.classList.add('opacity-80');
-        }
+      const footer = document.createElement('div');
+      footer.className = 'border-t border-gray-200 bg-gray-50 p-4 text-xs grid grid-cols-2 gap-2';
+      const assignedBox = document.createElement('div');
+      assignedBox.className = 'bg-white border border-gray-200 rounded-lg p-3';
+      assignedBox.innerHTML = `
+        <div class="text-gray-500">Verplant</div>
+        <div class="font-semibold text-sm text-gray-900">${assignedHours} h</div>
+      `;
+      const remainingBox = document.createElement('div');
+      remainingBox.className = 'bg-white border border-gray-200 rounded-lg p-3';
+      remainingBox.innerHTML = `
+        <div class="text-gray-500">Offen</div>
+        <div class="font-semibold text-sm ${totals.remaining ? 'text-orange-600' : 'text-green-600'}">${totals.remaining} h</div>
+      `;
+      footer.append(assignedBox, remainingBox);
+      panel.appendChild(footer);
 
-        const body = document.createElement('div');
-        body.className = 'card-body space-y-3';
+      renderTeacherCards();
 
-        const header = document.createElement('div');
-        header.className = 'flex items-start justify-between gap-3';
-
-        const headerLeft = document.createElement('div');
-        headerLeft.className = 'flex flex-col gap-1';
-        const nameEl = document.createElement('h3');
-        nameEl.className = 'card-title text-base';
-        nameEl.textContent = teacher.name || teacher.kuerzel || `#${teacher.id}`;
-        headerLeft.appendChild(nameEl);
-
-        if (teacher.kuerzel) {
-          const code = document.createElement('span');
-          code.className = 'text-xs opacity-60';
-          code.textContent = `Kürzel: ${teacher.kuerzel}`;
-          headerLeft.appendChild(code);
-        }
-
-        const summary = document.createElement('span');
-        summary.className = 'text-xs opacity-70';
-        const subjectSummary = `${assignedSubjects} Fach${assignedSubjects === 1 ? '' : 'e'}`;
-        summary.textContent = [
-          `${load.used}h geplant`,
-          Number.isFinite(load.limit) ? `${remainingCapacity}h frei` : 'Kapazität offen',
-          subjectSummary,
-        ].join(' · ');
-        headerLeft.appendChild(summary);
-
-        const headerRight = document.createElement('div');
-        headerRight.className = 'flex items-center gap-2';
-
-        const loadBadge = document.createElement('span');
-        loadBadge.className = 'badge badge-outline';
-        loadBadge.textContent = Number.isFinite(load.limit)
-          ? `${load.used}/${load.limit}h`
-          : `${load.used}h`;
-
-        const collapseToggle = document.createElement('button');
-        collapseToggle.type = 'button';
-        collapseToggle.className = 'btn btn-ghost btn-xs';
-        collapseToggle.textContent = collapsed ? '▸' : '▾';
-        collapseToggle.title = collapsed ? 'Aufklappen' : 'Zuklappen';
-        collapseToggle.addEventListener('click', () => {
-          setTeacherCollapsed(teacher.id, !collapsed);
-          renderBoard();
-        });
-
-        headerRight.append(loadBadge, collapseToggle);
-        header.append(headerLeft, headerRight);
-
-        const dropZone = document.createElement('div');
-        dropZone.className = 'space-y-2 rounded-lg border border-dashed border-base-300 bg-base-200/30 p-3 min-h-[80px] transition';
-        dropZone.dataset.teacherId = String(teacher.id);
-
-        const hint = document.createElement('p');
-        hint.className = 'text-xs opacity-60';
-        hint.textContent = 'Ziehen Sie Fächer hierher, um Stunden zuzuweisen.';
-        dropZone.appendChild(hint);
-
-        const assignmentList = document.createElement('div');
-        assignmentList.className = 'flex flex-wrap gap-2';
-
-        if (teacherAssignments && teacherAssignments.size) {
-          teacherAssignments.forEach(entry => {
-            const subject = maps.subjects.get(entry.subjectId);
-            const cls = maps.classes.get(entry.classId);
-
-            const row = document.createElement('div');
-            row.className = 'inline-flex items-center gap-3 rounded-lg border bg-base-100 px-3 py-2 cursor-grab active:cursor-grabbing shadow-sm max-w-full';
-            row.style.flexBasis = 'calc(50% - 0.5rem)';
-            row.draggable = true;
-            row.style.borderColor = subject?.color || 'transparent';
-
-            const labelCol = document.createElement('div');
-            labelCol.className = 'flex flex-col leading-tight text-left';
-            const subjectLine = document.createElement('span');
-            subjectLine.className = 'font-semibold text-xs';
-            subjectLine.textContent = subject?.kuerzel || subject?.name || 'Fach';
-            const badgeCount = document.createElement('span');
-            badgeCount.className = 'badge badge-sm badge-primary';
-            badgeCount.textContent = String(entry.total);
-            const subjectWrap = document.createElement('span');
-            subjectWrap.className = 'flex items-center gap-2';
-            subjectWrap.append(subjectLine, badgeCount);
-            const classLine = document.createElement('span');
-            classLine.className = 'text-[11px] opacity-70';
-            classLine.textContent = cls?.name || 'Klasse';
-            const metaLine = document.createElement('span');
-            metaLine.className = 'text-[10px] opacity-60';
-            metaLine.textContent = requirementMetaSummary(entry);
-            labelCol.append(subjectWrap, classLine, metaLine);
-
-            const controls = document.createElement('div');
-            controls.className = 'flex items-center gap-1';
-
-            const infoBtn = document.createElement('button');
-            infoBtn.type = 'button';
-            infoBtn.className = 'btn btn-ghost btn-xs';
-            infoBtn.textContent = 'ℹ';
-            infoBtn.title = 'Konfiguration anzeigen';
-
-            const minusBtn = document.createElement('button');
-            minusBtn.type = 'button';
-            minusBtn.className = 'btn btn-ghost btn-xs';
-            minusBtn.textContent = '−';
-
-            const removeBtn = document.createElement('button');
-            removeBtn.type = 'button';
-            removeBtn.className = 'btn btn-ghost btn-xs text-error';
-            removeBtn.textContent = '×';
-
-            controls.append(infoBtn, minusBtn, removeBtn);
-            row.append(labelCol, controls);
-            assignmentList.appendChild(row);
-
-            row.addEventListener('dragstart', event => {
-              currentDragPayload = {
-                kind: 'assignment',
-                teacherId: teacher.id,
-                classId: entry.classId,
-                subjectId: entry.subjectId,
-                count: entry.mandatory || 0,
-              };
-              event.dataTransfer.effectAllowed = 'move';
-              const payload = JSON.stringify(currentDragPayload);
-              event.dataTransfer.setData('application/json', payload);
-              event.dataTransfer.setData('text/plain', payload);
-            });
-
-            row.addEventListener('dragend', () => {
-              currentDragPayload = null;
-            });
-
-            infoBtn.addEventListener('click', () => promptSubjectConfigNavigation(entry));
-            minusBtn.addEventListener('click', () => adjustAssignment(entry, teacher.id, -1));
-            removeBtn.addEventListener('click', async () => {
-              const confirmed = await confirmModal({
-                title: 'Zuweisung entfernen',
-                message: `Alle ${entry.total} Stunden für ${subject?.name || 'Fach'} in ${cls?.name || 'Klasse'} entfernen?`,
-                confirmText: 'Entfernen',
-              });
-              if (!confirmed) return;
-              adjustAssignment(entry, teacher.id, -entry.total);
-            });
+      function renderTeacherCards() {
+        listContainer.innerHTML = '';
+        let teachersList = state.teachers.slice();
+        const query = (state.teacherSearchTerm || '').trim().toLowerCase();
+        if (query) {
+          teachersList = teachersList.filter(t => {
+            const name = (t.name || '').toLowerCase();
+            const kuerzel = (t.kuerzel || '').toLowerCase();
+            return name.includes(query) || kuerzel.includes(query);
           });
         }
 
-        if (teacherAssignments && teacherAssignments.size && hint.parentElement) {
-          hint.remove();
+        if (state.showOnlyWithCapacity) {
+          teachersList = teachersList.filter(teacher => {
+            const load = teacherLoads.get(teacher.id) ?? { used: 0, limit: getTeacherLimit(teacher) };
+            const remainingCapacity = Number.isFinite(load.limit) ? load.limit - load.used : Infinity;
+            return remainingCapacity > 0 || !Number.isFinite(load.limit);
+          });
         }
 
-        dropZone.appendChild(assignmentList);
+        if (state.teacherSort === 'remaining') {
+          teachersList.sort((a, b) => {
+            const loadA = teacherLoads.get(a.id) ?? { used: 0, limit: getTeacherLimit(a) };
+            const loadB = teacherLoads.get(b.id) ?? { used: 0, limit: getTeacherLimit(b) };
+            const remA = Number.isFinite(loadA.limit) ? loadA.limit - loadA.used : Infinity;
+            const remB = Number.isFinite(loadB.limit) ? loadB.limit - loadB.used : Infinity;
+            if (remA === remB) return (a.name || '').localeCompare(b.name || '');
+            return remB - remA;
+          });
+        } else {
+          teachersList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        }
 
-        const highlight = () => dropZone.classList.add('border-primary', 'bg-primary/10');
-        const unhighlight = () => dropZone.classList.remove('border-primary', 'bg-primary/10');
+        if (!teachersList.length) {
+          const empty = document.createElement('div');
+          empty.className = 'rounded-lg border border-dashed border-gray-200 bg-white/70 p-4 text-center text-sm text-gray-500';
+          empty.textContent = query
+            ? 'Keine Lehrkräfte passend zur Suche.'
+            : 'Keine Lehrkräfte vorhanden.';
+          listContainer.appendChild(empty);
+          return;
+        }
 
-        const computeAcceptance = data => {
-          if (!data) return false;
-          if (data.kind === 'assignment') {
-            return canAcceptAssignmentMove(teacher.id, data, teacherLoads);
+        teachersList.forEach((teacher, index) => {
+          const teacherMap = assignmentsByTeacher.get(teacher.id);
+          const load = teacherLoads.get(teacher.id) ?? { used: 0, limit: getTeacherLimit(teacher) };
+          const remainingCapacity = Number.isFinite(load.limit) ? Math.max(0, load.limit - load.used) : Infinity;
+          const isSelected = state.selectedTeacherId === teacher.id;
+          const subjectLabels = teacherSubjectLabels(teacher.id);
+
+          const card = document.createElement('article');
+          card.dataset.teacherId = String(teacher.id);
+          card.className = [
+            'group rounded-lg border-2 p-3 transition-all cursor-pointer',
+            isSelected ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-md',
+          ].join(' ');
+          card.draggable = true;
+
+          card.addEventListener('dragstart', () => {
+            currentDragPayload = {
+              kind: 'teacher',
+              teacherId: teacher.id,
+            };
+          });
+
+          card.addEventListener('dragend', () => {
+            currentDragPayload = null;
+          });
+
+          const topRow = document.createElement('div');
+          topRow.className = 'flex items-start justify-between gap-2';
+
+          const left = document.createElement('div');
+          left.className = 'flex items-center gap-3 min-w-0';
+
+          const badge = createTeacherBadge(teacher, { size: 'md' });
+          badge.classList.add('shadow-sm');
+          const info = document.createElement('div');
+          info.className = 'min-w-0';
+          const nameEl = document.createElement('div');
+          nameEl.className = 'font-medium text-sm text-gray-900 truncate';
+          nameEl.textContent = teacher.name || teacher.kuerzel || `Lehrkraft #${teacher.id}`;
+          const subjectsLine = document.createElement('div');
+          subjectsLine.className = 'text-xs text-gray-500 truncate';
+          subjectsLine.textContent = subjectLabels.length ? subjectLabels.join(', ') : 'Noch keine Zuweisung';
+          info.append(nameEl, subjectsLine);
+
+          left.append(badge, info);
+
+          const right = document.createElement('div');
+          right.className = 'flex items-center gap-2';
+          const loadBadge = document.createElement('span');
+          loadBadge.className = 'px-2 py-0.5 rounded-full bg-gray-100 text-xs font-semibold text-gray-700';
+          loadBadge.textContent = Number.isFinite(load.limit)
+            ? `${load.used}/${load.limit}h`
+            : `${load.used}h`;
+          right.appendChild(loadBadge);
+          if (isSelected) {
+            const mark = createIcon(ICONS.CHECK, { size: 16 });
+            mark.classList.add('text-blue-600');
+            right.appendChild(mark);
           }
-          const amount = data.count && data.count > 0 ? data.count : 1;
-          const key = `${data.classId}|${data.subjectId}`;
-          const info = remainingCache.get(key);
-          if (!info || info.remaining == null || info.remaining < amount) return false;
-          const isOptional = (info.participation || 'curriculum') === 'ag';
-          return canAssignHour(teacher.id, data.classId, data.subjectId, remainingCache, teacherLoads, amount, { isOptional });
-        };
 
-        dropZone.addEventListener('dragenter', event => {
-          const data = getDragData(event);
-          if (!data) return;
-          event.preventDefault();
-          if (computeAcceptance(data)) highlight();
-        });
+          topRow.append(left, right);
 
-        dropZone.addEventListener('dragover', event => {
-          const data = getDragData(event);
-          if (!data) return;
-          const canAccept = computeAcceptance(data);
-          event.preventDefault();
-          if (!canAccept) {
-            event.dataTransfer.dropEffect = 'none';
-          } else if (data.kind === 'assignment') {
-            event.dataTransfer.dropEffect = 'move';
-          } else {
-            event.dataTransfer.dropEffect = 'copy';
-          }
-          if (canAccept) {
-            highlight();
-          } else {
-            unhighlight();
-          }
-        });
+          const progressWrap = document.createElement('div');
+          progressWrap.className = 'space-y-1 mt-3';
+          const progressInfo = document.createElement('div');
+          progressInfo.className = 'flex items-center justify-between text-xs text-gray-600';
+          progressInfo.innerHTML = `
+            <span>Stunden</span>
+            <span class="font-semibold text-gray-900">${Number.isFinite(load.limit) ? `${load.used} / ${load.limit}` : `${load.used}`}</span>
+          `;
+          const progressBar = document.createElement('div');
+          progressBar.className = 'h-1.5 bg-gray-100 rounded-full overflow-hidden';
+          const fill = document.createElement('div');
+          const percent = Number.isFinite(load.limit) && load.limit > 0 ? Math.min(100, (load.used / load.limit) * 100) : 0;
+          fill.className = `h-full rounded-full transition-all ${progressColorClass(percent)}`;
+          fill.style.width = `${percent}%`;
+          progressBar.appendChild(fill);
+          progressWrap.append(progressInfo, progressBar);
 
-        dropZone.addEventListener('dragleave', () => {
-          unhighlight();
-        });
+          card.append(topRow, progressWrap);
 
-        dropZone.addEventListener('drop', async event => {
-          unhighlight();
-          event.preventDefault();
-          const data = getDragData(event);
-          if (!data) return;
-          if (!computeAcceptance(data)) return;
-          if (data.kind === 'assignment') {
-            await moveAssignmentBlock(data.teacherId, teacher.id, data.classId, data.subjectId);
-          } else {
-            const amount = data.count && data.count > 0 ? data.count : 1;
-            const revertOptimistic = applyOptimisticDrop(data.classId, data.subjectId, amount);
-            const success = await assignHour(teacher.id, data.classId, data.subjectId, amount);
-            if (!success) {
-              revertOptimistic();
+          const highlight = () => {
+            card.classList.add('border-blue-400', 'bg-blue-50');
+            card.classList.remove('border-gray-200');
+          };
+          const unhighlight = () => {
+            if (!isSelected) {
+              card.classList.remove('border-blue-400', 'bg-blue-50');
+              card.classList.add('border-gray-200', 'bg-white');
             }
+          };
+
+          card.addEventListener('dragenter', event => {
+            const data = getDragData(event);
+            if (!data) return;
+            event.preventDefault();
+            if (computeTeacherDropAcceptance(teacher.id, data)) {
+              highlight();
+            }
+          });
+
+          card.addEventListener('dragover', event => {
+            const data = getDragData(event);
+            if (!data) return;
+            const acceptable = computeTeacherDropAcceptance(teacher.id, data);
+            event.preventDefault();
+            event.dataTransfer.dropEffect = acceptable
+              ? data.kind === 'assignment'
+                ? 'move'
+                : 'copy'
+              : 'none';
+            if (acceptable) {
+              highlight();
+            } else {
+              unhighlight();
+            }
+          });
+
+          card.addEventListener('dragleave', () => {
+            unhighlight();
+          });
+
+          card.addEventListener('drop', async event => {
+            unhighlight();
+            event.preventDefault();
+            const data = getDragData(event);
+            if (!data) return;
+            if (!computeTeacherDropAcceptance(teacher.id, data)) return;
+            if (data.kind === 'assignment') {
+              await moveAssignmentBlock(data.teacherId, teacher.id, data.classId, data.subjectId);
+            } else {
+              const amount = data.count && data.count > 0 ? data.count : 1;
+              await assignHour(teacher.id, data.classId, data.subjectId, amount);
+            }
+            currentDragPayload = null;
+          });
+
+          card.addEventListener('click', () => {
+            state.selectedTeacherId = isSelected ? null : teacher.id;
+            renderBoard();
+          });
+
+          if (teacherMap && teacherMap.size === 0 && remainingCapacity <= 0 && Number.isFinite(load.limit)) {
+            const note = document.createElement('div');
+            note.className = 'mt-2 text-xs text-orange-600';
+            note.textContent = 'Deputat ausgeschöpft.';
+            card.appendChild(note);
           }
-          currentDragPayload = null;
+
+          listContainer.appendChild(card);
         });
+      }
 
-        if (remainingCapacity <= 0 && Number.isFinite(load.limit)) {
-          dropZone.classList.add('opacity-50');
-          if (hint.parentElement) hint.textContent = 'Deputat ausgeschöpft.';
-        }
-
-        if (collapsed) {
-          dropZone.style.display = 'none';
-        }
-
-        body.append(header);
-        if (!collapsed) body.append(dropZone);
-        teacherCard.appendChild(body);
-        teachersWrap.appendChild(teacherCard);
-      });
-
-      teacherScroller.appendChild(teachersWrap);
-      teacherColumn.appendChild(teacherScroller);
+      return panel;
     }
 
-    board.appendChild(teacherColumn);
-    boardSection.appendChild(board);
+    function renderSubjectPanel() {
+      const panel = document.createElement('section');
+      panel.className = 'flex-1 bg-white border border-gray-200 rounded-xl flex flex-col shadow-sm';
 
-    function applyOptimisticDrop(classId, subjectId, amount = 1) {
-      clearPaletteEmpty();
-      const key = `${classId}|${subjectId}`;
-      const cacheInfo = remainingCache.get(key);
-      if (cacheInfo && typeof cacheInfo.remaining === 'number') {
-        cacheInfo.remaining = Math.max(0, cacheInfo.remaining - amount);
-      }
+      const header = document.createElement('div');
+      header.className = 'flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 p-4 bg-white';
+      const headerLeft = document.createElement('div');
+      headerLeft.className = 'space-y-1';
+      const titleLine = document.createElement('div');
+      titleLine.className = 'flex items-center gap-2 text-lg font-semibold text-gray-900';
+      const bookIcon = createIcon(ICONS.BOOK_OPEN, { size: 20 });
+      bookIcon.classList.add('text-blue-600');
+      titleLine.append(bookIcon, document.createTextNode('Fächerverteilung'));
+    const subtitle = document.createElement('p');
+    subtitle.className = 'text-sm text-gray-600';
+    const activeTeacher = state.teachers.find(t => t.id === state.selectedTeacherId);
+    if (activeTeacher) {
+      subtitle.textContent = `${activeTeacher.name || activeTeacher.kuerzel || 'Lehrkraft'} ist ausgewählt – klicke auf offene Stunden, um jeweils 1h zuzuweisen (Umschalttaste = alle offenen Stunden).`;
+    } else {
+      subtitle.textContent = 'Wähle links eine Lehrkraft aus und klicke auf offene Stunden.';
+    }
+      headerLeft.append(titleLine, subtitle);
+      const viewBtn = document.createElement('button');
+      viewBtn.type = 'button';
+      viewBtn.className = 'flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
+      const viewIcon = createIcon(ICONS.SLIDERS_HORIZONTAL, { size: 16 });
+      viewIcon.classList.add('text-current');
+      viewBtn.append(viewIcon, document.createTextNode('Ansicht'));
+      header.append(headerLeft, viewBtn);
 
-      const badgeEntry = paletteBadges.get(key);
-      if (badgeEntry) {
-        const current = Number.parseInt(badgeEntry.badge.textContent, 10) || 0;
-        const next = Math.max(0, current - amount);
-        badgeEntry.badge.textContent = String(next);
-        if (next <= 0 && badgeEntry.pill.parentElement) {
-          badgeEntry.pill.remove();
-          paletteBadges.delete(key);
-        }
-      }
+      const content = document.createElement('div');
+      content.className = 'flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50';
 
-      const classEntry = classCards.get(classId);
-      if (classEntry) {
-        classEntry.remaining = Math.max(0, classEntry.remaining - amount);
-        classEntry.badge.textContent = `${classEntry.remaining} h offen`;
-        if (classEntry.remaining <= 0 || classEntry.pillWrap.children.length === 0) {
-          classEntry.card.remove();
-          classCards.delete(classId);
-          if (classCards.size === 0) {
-            showPaletteEmpty();
+      const classes = stateClassesSorted();
+      if (!classes.length) {
+        const empty = document.createElement('div');
+        empty.className = 'rounded-lg border border-dashed border-gray-200 bg-white/70 p-4 text-center text-sm text-gray-500';
+        empty.textContent = 'Keine Klassen vorhanden.';
+        content.appendChild(empty);
+      } else {
+        classes.forEach(cls => {
+          const classEntry = document.createElement('article');
+          classEntry.className = 'bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm';
+
+          const isCollapsed = state.collapsedClasses.has(cls.id);
+          const subjects = collectSubjectsForClass(cls.id);
+          const totalHours = subjects.reduce((sum, item) => sum + (item.info.total || 0), 0);
+          const remainingHours = subjects.reduce((sum, item) => sum + Math.max(0, item.info.remaining || 0), 0);
+
+          const classHeader = document.createElement('div');
+          classHeader.className = 'flex items-center justify-between gap-3 p-3 cursor-pointer hover:bg-gray-50 transition-colors';
+          classHeader.addEventListener('click', () => {
+            toggleClassCollapsed(cls.id);
+            renderBoard();
+          });
+
+          const left = document.createElement('div');
+          left.className = 'flex items-center gap-3';
+          const toggleButton = document.createElement('button');
+          toggleButton.type = 'button';
+          toggleButton.className = 'rounded-md border border-transparent p-1 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500';
+          const toggleIcon = createIcon(isCollapsed ? ICONS.CHEVRON_DOWN : ICONS.CHEVRON_UP, { size: 18 });
+          toggleButton.appendChild(toggleIcon);
+          toggleButton.addEventListener('click', event => {
+            event.stopPropagation();
+            toggleClassCollapsed(cls.id);
+            renderBoard();
+          });
+          const titleWrap = document.createElement('div');
+          titleWrap.innerHTML = `
+            <div class="font-semibold text-sm text-gray-900">${formatClassLabel(cls)}</div>
+            <div class="text-xs text-gray-500">${subjects.length} Fächer • ${totalHours} Stunden</div>
+          `;
+          left.append(toggleButton, titleWrap);
+
+          const right = document.createElement('div');
+          right.className = 'flex items-center gap-2 text-sm font-medium';
+          if (remainingHours === 0) {
+            const doneIcon = createIcon(ICONS.CHECK, { size: 16 });
+            doneIcon.classList.add('text-green-600');
+            const label = document.createElement('span');
+            label.className = 'text-green-600';
+            label.textContent = 'Vollständig';
+            right.append(doneIcon, label);
+          } else {
+            const warnIcon = createIcon(ICONS.ALERT_CIRCLE, { size: 16 });
+            warnIcon.classList.add('text-orange-500');
+            const label = document.createElement('span');
+            label.className = 'text-orange-600';
+            label.textContent = `${remainingHours} h offen`;
+            right.append(warnIcon, label);
           }
-        }
+
+          classHeader.append(left, right);
+          classEntry.appendChild(classHeader);
+
+          if (!isCollapsed) {
+            const grid = document.createElement('div');
+            grid.className = 'p-3 pt-0 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4';
+
+            subjects.forEach(({ key, info }) => {
+              const subject = maps.subjects.get(info.subjectId);
+              const assignedEntries = collectAssignmentsForClassSubject(info.classId, info.subjectId);
+              const isComplete = (info.remaining || 0) <= 0;
+
+              const card = document.createElement('div');
+              const cardClasses = ['p-3', 'rounded-lg', 'border-2', 'transition-all', 'bg-white', 'flex', 'flex-col', 'gap-3'];
+              if (isComplete) {
+                cardClasses.push('border-green-200', 'bg-green-50', 'cursor-default');
+              } else {
+                cardClasses.push('border-gray-200', 'hover:border-blue-400', 'hover:shadow-md', 'cursor-pointer');
+              }
+              card.className = cardClasses.join(' ');
+
+              const headerRow = document.createElement('div');
+              headerRow.className = 'flex items-start justify-between gap-2';
+              const subjectInfo = document.createElement('div');
+              subjectInfo.className = 'flex-1 min-w-0';
+              const subjectCode = document.createElement('div');
+              subjectCode.className = 'font-semibold text-sm text-gray-900 truncate';
+              subjectCode.textContent = subject?.kuerzel || formatSubjectLabel(subject) || 'Fach';
+              const subjectName = document.createElement('div');
+              subjectName.className = 'text-xs text-gray-500 truncate';
+              subjectName.textContent = subject?.name || '';
+              subjectInfo.append(subjectCode, subjectName);
+
+              const headerActions = document.createElement('div');
+              headerActions.className = 'flex items-center gap-1';
+
+              const infoBtn = document.createElement('button');
+              infoBtn.type = 'button';
+              infoBtn.className = 'flex items-center justify-center p-1.5 rounded-md border border-transparent text-gray-400 hover:text-gray-600 hover:border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500';
+              infoBtn.title = 'Konfiguration anzeigen';
+              const infoIcon = createIcon(ICONS.SLIDERS_HORIZONTAL, { size: 16 });
+              infoIcon.classList.add('text-current');
+              infoBtn.appendChild(infoIcon);
+              infoBtn.addEventListener('click', event => {
+                event.stopPropagation();
+                const entry = {
+                  classId: info.classId,
+                  subjectId: info.subjectId,
+                  records: assignedEntries.flatMap(item => item.entry.records),
+                  doppelstunde: assignedEntries[0]?.entry.records[0]?.doppelstunde ?? null,
+                  nachmittag: assignedEntries[0]?.entry.records[0]?.nachmittag ?? null,
+                  participation: assignedEntries[0]?.entry.records[0]?.participation ?? null,
+                };
+                promptSubjectConfigNavigation(entry);
+              });
+
+              headerActions.append(infoBtn);
+
+              headerRow.append(subjectInfo, headerActions);
+
+              const stats = document.createElement('div');
+              stats.className = 'mt-2 space-y-1 text-xs text-gray-600';
+              const totalLine = document.createElement('div');
+              totalLine.className = 'flex items-center justify-between';
+              totalLine.innerHTML = `<span>Gesamt</span><span class="font-semibold text-gray-900">${info.total || 0}h</span>`;
+              stats.append(totalLine);
+
+              const remainingValue = Math.max(0, info.remaining || 0);
+              if (remainingValue > 0) {
+                const remainingLine = document.createElement('div');
+                remainingLine.className = 'flex items-center justify-between text-orange-600';
+                remainingLine.innerHTML = `<span>Offen</span><span class="font-semibold">${remainingValue}h</span>`;
+                stats.append(remainingLine);
+              } else {
+                const assignedLine = document.createElement('div');
+                assignedLine.className = 'flex items-center gap-1 text-green-600 font-medium';
+                const assignedIcon = createIcon(ICONS.CHECK, { size: 14 });
+                assignedLine.append(assignedIcon, document.createTextNode('Zugewiesen'));
+                stats.append(assignedLine);
+              }
+
+              card.append(headerRow, stats);
+
+              if (!isComplete) {
+                card.addEventListener('click', async event => {
+                  if (state.assignmentMode === 'range') {
+                    setStatus('Bitte in den Fix-Modus wechseln, um Stunden zuzuweisen.', true);
+                    setTimeout(clearStatus, 1500);
+                    return;
+                  }
+                  if (!state.selectedTeacherId) {
+                    setStatus('Bitte zuerst eine Lehrkraft auswählen.', true);
+                    setTimeout(clearStatus, 1500);
+                    return;
+                  }
+                  const remaining = Math.max(0, info.remaining || 0);
+                  if (remaining <= 0) {
+                    setStatus('Keine offenen Stunden mehr für dieses Fach.', true);
+                    setTimeout(clearStatus, 1500);
+                    return;
+                  }
+                  const amount = event.shiftKey ? remaining : 1;
+                  await assignHour(state.selectedTeacherId, info.classId, info.subjectId, amount);
+                });
+
+                const highlight = () => {
+                  card.classList.add('border-blue-400', 'bg-blue-50');
+                };
+                const unhighlight = () => {
+                  card.classList.remove('border-blue-400', 'bg-blue-50');
+                };
+
+                card.addEventListener('dragenter', event => {
+                  const data = getDragData(event);
+                  if (!data || data.kind !== 'teacher') return;
+                  event.preventDefault();
+                  highlight();
+                });
+
+                card.addEventListener('dragover', event => {
+                  const data = getDragData(event);
+                  if (!data || data.kind !== 'teacher') return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'copy';
+                });
+
+                card.addEventListener('dragleave', () => {
+                  unhighlight();
+                });
+
+                card.addEventListener('drop', async event => {
+                  const data = getDragData(event);
+                  unhighlight();
+                  if (!data || data.kind !== 'teacher') return;
+                  event.preventDefault();
+                  const remaining = Math.max(0, info.remaining || 0);
+                  if (remaining <= 0) {
+                    setStatus('Keine offenen Stunden mehr für dieses Fach.', true);
+                    setTimeout(clearStatus, 1500);
+                    return;
+                  }
+                  await assignHour(data.teacherId, info.classId, info.subjectId, 1);
+                });
+              }
+
+              if (assignedEntries.length) {
+                const assignmentList = document.createElement('div');
+                assignmentList.className = 'mt-3 border-t border-gray-200 pt-2 space-y-2';
+                assignedEntries.forEach(({ teacher, entry }) => {
+                  const row = document.createElement('div');
+                  row.className = 'flex items-center justify-between gap-2 rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-700';
+                  row.draggable = true;
+                  row.addEventListener('dragstart', event => {
+                    currentDragPayload = {
+                      kind: 'assignment',
+                      teacherId: teacher.id,
+                      classId: entry.classId,
+                      subjectId: entry.subjectId,
+                      count: entry.total,
+                    };
+                    event.dataTransfer.effectAllowed = 'move';
+                    const payload = JSON.stringify(currentDragPayload);
+                    event.dataTransfer.setData('application/json', payload);
+                    event.dataTransfer.setData('text/plain', payload);
+                  });
+                  row.addEventListener('dragend', () => {
+                    currentDragPayload = null;
+                  });
+
+                  const rowInfo = document.createElement('div');
+                  rowInfo.className = 'flex items-center gap-2';
+                  const badge = createTeacherBadge(teacher, { size: 'sm' });
+                  badge.classList.add('shadow-sm');
+                  rowInfo.appendChild(badge);
+
+                  const removeBtn = document.createElement('button');
+                  removeBtn.type = 'button';
+                  removeBtn.className = 'inline-flex items-center justify-center w-6 h-6 rounded-md text-red-500 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-1';
+                  removeBtn.title = 'Zuweisung entfernen';
+                  const removeIcon = createIcon(ICONS.X, { size: 14 });
+                  removeBtn.appendChild(removeIcon);
+                  removeBtn.addEventListener('click', async () => {
+                    const confirmed = await confirmModal({
+                      title: 'Zuweisung entfernen',
+                      message: `Alle ${entry.total} Stunden entfernen?`,
+                      confirmText: 'Entfernen',
+                    });
+                    if (!confirmed) return;
+                    adjustAssignment(entry, teacher.id, -entry.total);
+                  });
+                  rowInfo.appendChild(removeBtn);
+
+                  const hoursBadge = document.createElement('span');
+                  hoursBadge.className = 'inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold text-xs';
+                  hoursBadge.textContent = `${entry.total}h`;
+
+                  row.append(rowInfo, hoursBadge);
+                  assignmentList.appendChild(row);
+                });
+                card.appendChild(assignmentList);
+              }
+
+              grid.appendChild(card);
+            });
+
+            classEntry.appendChild(grid);
+          }
+
+          content.appendChild(classEntry);
+        });
       }
 
-      return () => {
-        renderBoard();
-      };
+      panel.append(header, content);
+      return panel;
     }
-  }
 
-  function hasRemaining(remainingMap) {
-    return Array.from(remainingMap.values()).some(info => info.remaining > 0);
+    function renderTeacherDetailsPanel() {
+      const teacher = state.teachers.find(t => t.id === state.selectedTeacherId);
+      if (!teacher) return null;
+      const assignments = assignmentsByTeacher.get(teacher.id);
+      const load = teacherLoads.get(teacher.id) ?? { used: 0, limit: getTeacherLimit(teacher) };
+
+      const panel = document.createElement('aside');
+      panel.className = 'xl:w-80 w-full bg-white border border-gray-200 rounded-xl flex flex-col shadow-sm';
+
+      const header = document.createElement('div');
+      header.className = 'p-4 border-b border-gray-200 space-y-3 bg-white';
+      const headerTop = document.createElement('div');
+      headerTop.className = 'flex items-center justify-between gap-3';
+      const identity = document.createElement('div');
+      identity.className = 'flex items-center gap-2';
+      const detailBadge = createTeacherBadge(teacher, { size: 'sm' });
+      detailBadge.classList.add('shadow-sm');
+      const identityText = document.createElement('div');
+      identityText.className = 'space-y-1';
+      const title = document.createElement('div');
+      title.className = 'font-semibold text-sm text-gray-900';
+      title.textContent = 'Details';
+      const name = document.createElement('div');
+      name.className = 'text-sm text-gray-500';
+      name.textContent = teacher.name || teacher.kuerzel || `Lehrkraft #${teacher.id}`;
+      identityText.append(title, name);
+      identity.append(detailBadge, identityText);
+      const deselectBtn = document.createElement('button');
+      deselectBtn.type = 'button';
+      deselectBtn.className = 'inline-flex items-center px-2.5 py-1 text-xs font-medium text-gray-600 border border-gray-200 rounded-md hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1';
+      deselectBtn.textContent = 'Auswahl aufheben';
+      deselectBtn.addEventListener('click', () => {
+        state.selectedTeacherId = null;
+        renderBoard();
+      });
+      headerTop.append(identity, deselectBtn);
+      header.appendChild(headerTop);
+
+      const body = document.createElement('div');
+      body.className = 'flex-1 overflow-y-auto p-4 space-y-4 bg-white';
+
+      const loadCard = document.createElement('div');
+      loadCard.className = 'rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700 space-y-1';
+      loadCard.innerHTML = `
+        <div class="font-semibold text-gray-900">Kapazität</div>
+        <div>${Number.isFinite(load.limit) ? `${load.used} von ${load.limit} Stunden` : `${load.used} Stunden (offene Kapazität)`}</div>
+      `;
+      body.appendChild(loadCard);
+
+      const subjects = teacherSubjectLabels(teacher.id);
+      if (subjects.length) {
+        const chipCard = document.createElement('div');
+        chipCard.className = 'rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700 space-y-2';
+        const chipTitle = document.createElement('div');
+        chipTitle.className = 'font-semibold';
+        chipTitle.textContent = 'Zugewiesene Fächer';
+        chipCard.appendChild(chipTitle);
+        const chipWrap = document.createElement('div');
+        chipWrap.className = 'flex flex-wrap gap-1';
+        subjects.forEach(label => {
+          const chip = document.createElement('span');
+          chip.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold';
+          chip.textContent = label;
+          chipWrap.appendChild(chip);
+        });
+        chipCard.appendChild(chipWrap);
+        body.appendChild(chipCard);
+      }
+
+      const assignmentCard = document.createElement('div');
+      assignmentCard.className = 'rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700 space-y-2 shadow-sm';
+      const assignmentTitle = document.createElement('div');
+      assignmentTitle.className = 'font-semibold text-gray-900';
+      assignmentTitle.textContent = 'Zugewiesene Stunden';
+      assignmentCard.appendChild(assignmentTitle);
+
+      if (!assignments || !assignments.size) {
+        const empty = document.createElement('div');
+        empty.className = 'text-gray-500';
+        empty.textContent = 'Noch keine Zuweisungen in dieser Version.';
+        assignmentCard.appendChild(empty);
+      } else {
+        const list = document.createElement('div');
+        list.className = 'space-y-2';
+        const entries = Array.from(assignments.values()).sort((a, b) => {
+          const classA = maps.classes.get(a.classId)?.name || '';
+          const classB = maps.classes.get(b.classId)?.name || '';
+          if (classA === classB) {
+            const subjA = maps.subjects.get(a.subjectId)?.name || '';
+            const subjB = maps.subjects.get(b.subjectId)?.name || '';
+            return subjA.localeCompare(subjB);
+          }
+          return classA.localeCompare(classB);
+        });
+        entries.forEach(entry => {
+          const row = document.createElement('div');
+          row.className = 'flex items-start justify-between gap-2 rounded-md border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700';
+          const info = document.createElement('div');
+          info.className = 'flex flex-col';
+          const classLabel = maps.classes.get(entry.classId);
+          const subjectLabel = maps.subjects.get(entry.subjectId);
+          const top = document.createElement('span');
+          top.className = 'font-medium text-gray-900';
+          top.textContent = `${formatSubjectLabel(subjectLabel)} (${formatClassLabel(classLabel)})`;
+          info.appendChild(top);
+          const hours = document.createElement('span');
+          hours.className = 'inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold';
+          hours.textContent = `${entry.total}h`;
+          row.append(info, hours);
+          list.appendChild(row);
+        });
+        assignmentCard.appendChild(list);
+      }
+
+      body.appendChild(assignmentCard);
+
+      panel.append(header, body);
+      return panel;
+    }
+
+    function computeTeacherDropAcceptance(targetTeacherId, payload) {
+      if (!payload) return false;
+      if (payload.kind === 'assignment') {
+        if (payload.teacherId === targetTeacherId) return false;
+        return canAcceptAssignmentMove(targetTeacherId, payload, teacherLoads);
+      }
+      const amount = payload.count && payload.count > 0 ? payload.count : 1;
+      const key = `${payload.classId}|${payload.subjectId}`;
+      const info = remainingMap.get(key);
+      if (!info || info.remaining == null || info.remaining < amount) return false;
+      const isOptional = (info.participation || 'curriculum') === 'ag';
+      return canAssignHour(targetTeacherId, payload.classId, payload.subjectId, remainingMap, teacherLoads, amount, {
+        isOptional,
+      });
+    }
+
+    function collectSubjectsForClass(classId) {
+      const subjects = [];
+      remainingMap.forEach((info, key) => {
+        if (info.classId === classId) {
+          subjects.push({ key, info });
+        }
+      });
+      subjects.sort((a, b) => {
+        const subjA = maps.subjects.get(a.info.subjectId);
+        const subjB = maps.subjects.get(b.info.subjectId);
+        return (subjA?.name || '').localeCompare(subjB?.name || '');
+      });
+      return subjects;
+    }
+
+    function collectAssignmentsForClassSubject(classId, subjectId) {
+      const key = `${classId}|${subjectId}`;
+      const entries = classSubjectAssignments.get(key) || [];
+      return entries
+        .map(({ teacherId, entry }) => {
+          const teacher = maps.teachers.get(teacherId);
+          if (!teacher) return null;
+          return { teacher, entry };
+        })
+        .filter(Boolean);
+    }
+
+    function toggleClassCollapsed(classId) {
+      if (state.collapsedClasses.has(classId)) {
+        state.collapsedClasses.delete(classId);
+      } else {
+        state.collapsedClasses.add(classId);
+      }
+    }
+
+    function teacherSubjectLabels(teacherId) {
+      const assignments = assignmentsByTeacher.get(teacherId);
+      if (!assignments) return [];
+      const labels = new Set();
+      assignments.forEach(entry => {
+        const subject = maps.subjects.get(entry.subjectId);
+        if (subject) {
+          labels.add(subject.kuerzel || subject.name);
+        }
+      });
+      return Array.from(labels).sort((a, b) => a.localeCompare(b));
+    }
+
+    function canAcceptAssignmentMove(targetTeacherId, payload, loads) {
+      if (!payload || payload.kind !== 'assignment') return false;
+      if (payload.teacherId === targetTeacherId) return false;
+      const sourceRecords = state.requirements.filter(req =>
+        req.version_id === state.selectedVersionId &&
+        req.teacher_id === payload.teacherId &&
+        req.class_id === payload.classId &&
+        req.subject_id === payload.subjectId
+      );
+      if (!sourceRecords.length) return false;
+      const load = loads.get(targetTeacherId);
+      if (!load) return true;
+      if (!Number.isFinite(load.limit)) return true;
+      const totalMove = typeof payload.count === 'number' && payload.count > 0
+        ? payload.count
+        : sourceRecords.reduce((sum, rec) => sum + (rec.wochenstunden || 0), 0);
+      return load.used + totalMove <= load.limit;
+    }
   }
 
   function canAssignHour(teacherId, classId, subjectId, remainingMap, teacherLoads, amount = 1, options = {}) {
@@ -1165,6 +1467,19 @@ function labelForOption(options, value) {
     return result;
   }
 
+  function groupAssignmentsByClassSubject(assignmentsByTeacher) {
+    const result = new Map();
+    assignmentsByTeacher.forEach((teacherMap, teacherId) => {
+      teacherMap.forEach(entry => {
+        const key = `${entry.classId}|${entry.subjectId}`;
+        const list = result.get(key) ?? [];
+        list.push({ teacherId, entry });
+        result.set(key, list);
+      });
+    });
+    return result;
+  }
+
   function computeTeacherLoads(assignments) {
     const loads = new Map();
     state.teachers.forEach(teacher => {
@@ -1184,13 +1499,12 @@ function labelForOption(options, value) {
     return Infinity;
   }
 
-function countRemainingHours(map) {
-  let total = 0;
-  map.forEach(info => {
-    total += Math.max(0, info.remaining || 0);
-  });
-  return total;
-}
+  function progressColorClass(percentage) {
+    if (!Number.isFinite(percentage)) return 'bg-green-500';
+    if (percentage >= 90) return 'bg-red-500';
+    if (percentage >= 75) return 'bg-orange-500';
+    return 'bg-green-500';
+  }
 
   function getDragData(event) {
     try {
@@ -1214,27 +1528,6 @@ function countRemainingHours(map) {
       return currentDragPayload;
     }
     return null;
-  }
-
-  function computePaletteClassOrder(groupedRemaining) {
-    const classIds = new Set(groupedRemaining.keys());
-    const baseOrder = stateClassesSorted();
-    const result = [];
-
-    baseOrder.forEach(cls => {
-      if (classIds.has(cls.id)) result.push(cls);
-    });
-
-    classIds.forEach(id => {
-      if (!result.some(cls => cls.id === id)) {
-        const clsEntry = maps.classes.get(id);
-        result.push({
-          id,
-          name: clsEntry?.name || `Klasse #${id}`,
-        });
-      }
-    });
-    return result;
   }
 
   function formatSubjectLabel(subject) {
@@ -1307,8 +1600,8 @@ function countRemainingHours(map) {
       message,
       confirmText: 'Datenpflege öffnen',
       cancelText: 'Schließen',
-      confirmButtonClass: 'btn btn-sm btn-primary',
-      cancelButtonClass: 'btn btn-sm btn-ghost',
+      confirmButtonClass: 'inline-flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+      cancelButtonClass: 'inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
     });
     if (confirmed) {
       try {
@@ -1326,34 +1619,22 @@ function stateClassesSorted() {
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
-function isTeacherCollapsed(id) {
-  return state.collapsedTeachers.has(id);
-}
-
-function setTeacherCollapsed(id, collapsed) {
-  if (collapsed) {
-    state.collapsedTeachers.add(id);
-  } else {
-    state.collapsedTeachers.delete(id);
-  }
-}
-
   initialize();
   return container;
 }
 
 function createStatusBar() {
   const element = document.createElement('div');
-  element.className = 'text-sm opacity-70 min-h-[1.5rem]';
+  element.className = 'text-sm text-gray-500 min-h-[1.5rem]';
   return {
     element,
     set(message, error = false) {
       element.textContent = message || '';
-      element.className = `text-sm ${error ? 'text-error' : 'text-success'} min-h-[1.5rem]`;
+      element.className = `text-sm ${error ? 'text-red-600' : 'text-green-600'} min-h-[1.5rem]`;
     },
     clear() {
       element.textContent = '';
-      element.className = 'text-sm opacity-70 min-h-[1.5rem]';
+      element.className = 'text-sm text-gray-500 min-h-[1.5rem]';
     },
   };
 }

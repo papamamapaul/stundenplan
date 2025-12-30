@@ -13,6 +13,7 @@ from ..models import (
     RequirementParticipationEnum,
     Subject,
 )
+from ..utils import ensure_requirement_columns
 
 
 def _ensure_enum(value, enum_cls, default):
@@ -56,18 +57,34 @@ def resolve_participation(class_subject: Optional[ClassSubject]) -> RequirementP
     return RequirementParticipationEnum.curriculum
 
 
-def sync_requirements_for_class_subject(session: Session, account_id: int, class_id: int, subject_id: int) -> int:
+def sync_requirements_for_class_subject(
+    session: Session,
+    account_id: int,
+    class_id: int,
+    subject_id: int,
+    planning_period_id: Optional[int] = None,
+) -> int:
     """Apply the current class-subject configuration to all matching requirements.
 
     Returns the number of updated requirements.
     """
-    class_subject = session.exec(
-        select(ClassSubject).where(
-            ClassSubject.account_id == account_id,
-            ClassSubject.class_id == class_id,
-            ClassSubject.subject_id == subject_id,
+    ensure_requirement_columns(session)
+    stmt = select(ClassSubject).where(
+        ClassSubject.account_id == account_id,
+        ClassSubject.class_id == class_id,
+        ClassSubject.subject_id == subject_id,
+    )
+    if planning_period_id is not None:
+        stmt = stmt.where(
+            (ClassSubject.planning_period_id == planning_period_id)
+            | (ClassSubject.planning_period_id == None)  # noqa: E711
         )
-    ).first()
+    class_subject = session.exec(stmt).first()
+    if class_subject and planning_period_id is not None and class_subject.planning_period_id is None:
+        class_subject.planning_period_id = planning_period_id
+        session.add(class_subject)
+        session.commit()
+        session.refresh(class_subject)
     doppel = resolve_doppelstunde(session, subject_id, class_subject)
     nachmittag = resolve_nachmittag(session, subject_id, class_subject)
     participation = resolve_participation(class_subject)
@@ -78,9 +95,16 @@ def sync_requirements_for_class_subject(session: Session, account_id: int, class
         Requirement.class_id == class_id,
         Requirement.subject_id == subject_id,
     )
+    if planning_period_id is not None:
+        requirement_stmt = requirement_stmt.where(
+            (Requirement.planning_period_id == planning_period_id)
+            | (Requirement.planning_period_id == None)  # noqa: E711
+        )
     for req in session.exec(requirement_stmt):
         if req.config_source == RequirementConfigSourceEnum.manual:
             continue
+        if planning_period_id is not None and req.planning_period_id is None:
+            req.planning_period_id = planning_period_id
         req.doppelstunde = doppel
         req.nachmittag = nachmittag
         req.config_source = RequirementConfigSourceEnum.subject
@@ -95,13 +119,21 @@ def sync_requirements_for_class_subject(session: Session, account_id: int, class
 
 def apply_subject_defaults(session: Session, requirement: Requirement) -> Requirement:
     """Apply subject/class defaults to a requirement and mark it as subject-config driven."""
-    class_subject = session.exec(
-        select(ClassSubject).where(
-            ClassSubject.account_id == requirement.account_id,
-            ClassSubject.class_id == requirement.class_id,
-            ClassSubject.subject_id == requirement.subject_id,
+    ensure_requirement_columns(session)
+    stmt = select(ClassSubject).where(
+        ClassSubject.account_id == requirement.account_id,
+        ClassSubject.class_id == requirement.class_id,
+        ClassSubject.subject_id == requirement.subject_id,
+    )
+    if requirement.planning_period_id is not None:
+        stmt = stmt.where(
+            (ClassSubject.planning_period_id == requirement.planning_period_id)
+            | (ClassSubject.planning_period_id == None)  # noqa: E711
         )
-    ).first()
+    class_subject = session.exec(stmt).first()
+    if class_subject and requirement.planning_period_id is not None and class_subject.planning_period_id is None:
+        class_subject.planning_period_id = requirement.planning_period_id
+        session.add(class_subject)
 
     requirement.doppelstunde = resolve_doppelstunde(session, requirement.subject_id, class_subject)
     requirement.nachmittag = resolve_nachmittag(session, requirement.subject_id, class_subject)
@@ -112,6 +144,7 @@ def apply_subject_defaults(session: Session, requirement: Requirement) -> Requir
 
 def sync_requirements_for_subject(session: Session, subject_id: int) -> int:
     """Re-apply subject defaults for all requirements of a subject."""
+    ensure_requirement_columns(session)
     updated = 0
     for req in session.exec(select(Requirement).where(Requirement.subject_id == subject_id)):
         if req.config_source == RequirementConfigSourceEnum.manual:

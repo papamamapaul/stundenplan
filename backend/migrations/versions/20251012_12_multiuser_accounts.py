@@ -5,7 +5,7 @@ Revises: 20251012_11_subject_config_sync
 Create Date: 2025-10-12
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
@@ -106,7 +106,7 @@ def upgrade() -> None:
             {
                 "name": "Default Account",
                 "desc": "Automatisch angelegter Standard-Account",
-                "created": datetime.utcnow(),
+                "created": datetime.now(timezone.utc),
             },
         )
         account_id = connection.execute(
@@ -130,7 +130,7 @@ def upgrade() -> None:
                 "password_hash": "admin",
                 "is_active": 1,
                 "is_superuser": 1,
-                "created": datetime.utcnow(),
+                "created": datetime.now(timezone.utc),
             },
         )
         user_id = connection.execute(
@@ -155,7 +155,7 @@ def upgrade() -> None:
                     "account_id": account_id,
                     "user_id": user_id,
                     "role": "owner",
-                    "created": datetime.utcnow(),
+                    "created": datetime.now(timezone.utc),
                 },
             )
 

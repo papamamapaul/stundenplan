@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
+
+from .models import AccountRole
 
 
 class GenerateParams(BaseModel):
@@ -39,8 +41,18 @@ class PlanSlotOut(BaseModel):
     stunde: int
     subject_id: int
     teacher_id: int
+    room_id: Optional[int] = None
+    room_name: Optional[str] = None
     is_fixed: bool | None = None
     is_flexible: bool | None = None
+
+
+class SlotMeta(BaseModel):
+    index: int
+    label: str
+    start: Optional[str] = None
+    end: Optional[str] = None
+    is_pause: bool = False
 
 
 class PlanSummary(BaseModel):
@@ -67,9 +79,11 @@ class PlanDetail(BaseModel):
     comment: Optional[str] = None
     rule_profile_id: Optional[int] = None
     slots: List[PlanSlotOut] = Field(default_factory=list)
+    slots_meta: List[SlotMeta] = Field(default_factory=list)
     rules_snapshot: Optional[Dict[str, Union[int, bool]]] = None
     rule_keys_active: List[str] = Field(default_factory=list)
     params_used: Optional[GenerateParams] = None
+    planning_period_id: Optional[int] = None
 
 
 class GenerateResponse(BaseModel):
@@ -78,19 +92,61 @@ class GenerateResponse(BaseModel):
     score: float | None
     objective_value: float | None
     slots: List[PlanSlotOut]
+    slots_meta: List[SlotMeta] = Field(default_factory=list)
     rules_snapshot: Dict[str, Union[int, bool]] = Field(default_factory=dict)
     rule_keys_active: List[str] = Field(default_factory=list)
     params_used: GenerateParams
+    planning_period_id: Optional[int] = None
 
 
 class PlanSlotsUpdateRequest(BaseModel):
     slots: List[PlanSlotOut]
 
 
+class PlanningPeriodBase(BaseModel):
+    name: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_active: bool = False
+
+
+class PlanningPeriodCreate(PlanningPeriodBase):
+    pass
+
+
+class PlanningPeriodUpdate(BaseModel):
+    name: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_active: Optional[bool] = None
+
+
+class PlanningPeriodCloneRequest(BaseModel):
+    name: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    is_active: bool = False
+    copy_curriculum: bool = True
+    copy_requirements: bool = True
+    copy_basisplan: bool = True
+    copy_versions: bool = True
+
+
+class PlanningPeriodOut(PlanningPeriodBase):
+    id: int
+    account_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # Backup/export schemas
 class BackupTeacher(BaseModel):
     name: Optional[str] = None
     kuerzel: Optional[str] = None
+    color: Optional[str] = None
     deputat_soll: Optional[int] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -144,6 +200,80 @@ class BackupRoom(BaseModel):
     name: str
     type: Optional[str] = None
     capacity: Optional[int] = None
+
+
+class UserAccountLink(BaseModel):
+    account_id: int
+    account_name: str
+    role: str
+
+
+class UserProfile(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str] = None
+    is_superuser: bool = False
+    accounts: List[UserAccountLink] = Field(default_factory=list)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = 'bearer'
+    expires_in: int
+
+
+class AdminUserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    account_id: Optional[int] = None
+    role: AccountRole = AccountRole.teacher
+    is_superuser: bool = False
+
+
+class AdminUserOut(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str]
+    is_superuser: bool
+    created_at: datetime
+    account_id: Optional[int]
+    account_name: Optional[str] = None
+    role: AccountRole
+
+    class Config:
+        from_attributes = True
+
+
+class AccountCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    admin_email: EmailStr
+    admin_password: str
+    admin_full_name: Optional[str] = None
+
+
+class AccountOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    created_at: datetime
+    admin_email: Optional[EmailStr] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AccountUserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    role: AccountRole = AccountRole.teacher
     is_classroom: Optional[bool] = None
 
 
@@ -203,6 +333,7 @@ class PlanSlotExport(BaseModel):
     class_name: str
     subject_name: str
     teacher_name: str
+    room_name: Optional[str] = None
     tag: str
     stunde: int
     is_fixed: Optional[bool] = None
@@ -226,8 +357,43 @@ class BasisPlanData(BaseModel):
     fixed: Dict[str, Any] = Field(default_factory=dict)
     flexible: Dict[str, Any] = Field(default_factory=dict)
 
+
+class SlotDefinition(BaseModel):
+    label: str
+    start: Optional[str] = None
+    end: Optional[str] = None
+    is_pause: bool = False
+
+
+class SchoolSettingsBase(BaseModel):
+    name: Optional[str] = None
+    short_name: Optional[str] = None
+    street: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    school_type: Optional[str] = None
+    organization_type: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class SchoolSettingsOut(SchoolSettingsBase):
+    account_id: int
+    default_days: List[str] = Field(default_factory=list)
+    default_slots: List[SlotDefinition] = Field(default_factory=list)
+
+
+class SchoolSettingsUpdate(SchoolSettingsBase):
+    default_days: Optional[List[str]] = None
+    default_slots: Optional[List[SlotDefinition]] = None
+
     class Config:
         extra = "allow"
+
+
+class BasisPlanUpdate(BaseModel):
+    name: Optional[str] = None
+    data: Optional[BasisPlanData] = None
 
 
 class BasisPlanOut(BaseModel):
@@ -235,8 +401,8 @@ class BasisPlanOut(BaseModel):
     name: str
     data: Optional[BasisPlanData] = None
     updated_at: datetime
+    planning_period_id: Optional[int] = None
 
 
-class BasisPlanUpdate(BaseModel):
-    name: Optional[str] = None
-    data: Optional[BasisPlanData] = None
+class BasisPlanPreviewRequest(BaseModel):
+    payload: Optional[BasisPlanData] = None

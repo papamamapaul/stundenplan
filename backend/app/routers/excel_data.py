@@ -7,10 +7,11 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from ..core.security import require_active_user
 from ..database import get_session
 from ..models import Class, ClassSubject, Subject, RequirementParticipationEnum
 
-router = APIRouter(prefix="/excel", tags=["excel"])
+router = APIRouter(prefix="/excel", tags=["excel"], dependencies=[Depends(require_active_user)])
 
 
 @router.get("/requirements")

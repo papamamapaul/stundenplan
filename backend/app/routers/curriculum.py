@@ -6,13 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from ..core.security import require_active_user
 from ..database import get_session
 from ..models import Class, ClassSubject, Subject, RequirementParticipationEnum, DoppelstundeEnum, NachmittagEnum
-from ..services.accounts import resolve_account
+from ..domain.accounts.service import resolve_account, resolve_planning_period
 from ..services.subject_config import sync_requirements_for_class_subject
 
 
-router = APIRouter(prefix="/curriculum", tags=["curriculum"])
+router = APIRouter(prefix="/curriculum", tags=["curriculum"], dependencies=[Depends(require_active_user)])
 
 
 def _ensure_curriculum_columns(session: Session) -> None:
@@ -30,26 +31,49 @@ def _ensure_curriculum_columns(session: Session) -> None:
         session.exec(text("ALTER TABLE classsubject ADD COLUMN nachmittag TEXT"))
         session.commit()
         columns.add("nachmittag")
+    if "planning_period_id" not in columns:
+        session.exec(text("ALTER TABLE classsubject ADD COLUMN planning_period_id INTEGER"))
+        session.commit()
 
 
 @router.get("", response_model=List[ClassSubject])
 def list_curriculum(
     account_id: Optional[int] = Query(None),
+    planning_period_id: Optional[int] = Query(None),
     session: Session = Depends(get_session),
 ) -> List[ClassSubject]:
     _ensure_curriculum_columns(session)
     account = resolve_account(session, account_id)
-    return session.exec(select(ClassSubject).where(ClassSubject.account_id == account.id)).all()
+    period = resolve_planning_period(session, account, planning_period_id)
+    stmt = select(ClassSubject).where(
+        ClassSubject.account_id == account.id,
+        (ClassSubject.planning_period_id == period.id) | (ClassSubject.planning_period_id == None),  # noqa: E711
+    )
+    rows = session.exec(stmt).all()
+    dirty = False
+    filtered: List[ClassSubject] = []
+    for row in rows:
+        if row.planning_period_id is None:
+            row.planning_period_id = period.id
+            session.add(row)
+            dirty = True
+        if row.planning_period_id == period.id:
+            filtered.append(row)
+    if dirty:
+        session.commit()
+    return filtered
 
 
 @router.post("", response_model=ClassSubject)
 def create_curriculum(
     item: ClassSubject,
     account_id: Optional[int] = Query(None),
+    planning_period_id: Optional[int] = Query(None),
     session: Session = Depends(get_session),
 ) -> ClassSubject:
     _ensure_curriculum_columns(session)
     account = resolve_account(session, account_id)
+    period = resolve_planning_period(session, account, planning_period_id)
     cls = session.get(Class, item.class_id)
     if not cls or cls.account_id != account.id:
         raise HTTPException(status_code=400, detail="class_id invalid")
@@ -69,10 +93,17 @@ def create_curriculum(
         except ValueError:
             raise HTTPException(status_code=400, detail="unknown nachmittag option")
     item.account_id = account.id
+    item.planning_period_id = period.id
     session.add(item)
     session.commit()
     session.refresh(item)
-    sync_requirements_for_class_subject(session, account.id, item.class_id, item.subject_id)
+    sync_requirements_for_class_subject(
+        session,
+        account.id,
+        item.class_id,
+        item.subject_id,
+        planning_period_id=period.id,
+    )
     return item
 
 
@@ -81,6 +112,7 @@ def update_curriculum(
     item_id: int,
     payload: ClassSubject,
     account_id: Optional[int] = Query(None),
+    planning_period_id: Optional[int] = Query(None),
     session: Session = Depends(get_session),
 ) -> ClassSubject:
     _ensure_curriculum_columns(session)
@@ -88,8 +120,13 @@ def update_curriculum(
     if not row:
         raise HTTPException(status_code=404, detail="not found")
     account = resolve_account(session, account_id)
+    period = resolve_planning_period(session, account, planning_period_id)
     if row.account_id != account.id:
         raise HTTPException(status_code=403, detail="curriculum entry belongs to different account")
+    if row.planning_period_id is None:
+        row.planning_period_id = period.id
+    elif row.planning_period_id != period.id:
+        raise HTTPException(status_code=403, detail="curriculum entry belongs to different planning period")
     if payload.class_id:
         cls = session.get(Class, payload.class_id)
         if not cls or cls.account_id != account.id:
@@ -128,7 +165,13 @@ def update_curriculum(
     session.add(row)
     session.commit()
     session.refresh(row)
-    sync_requirements_for_class_subject(session, account.id, row.class_id, row.subject_id)
+    sync_requirements_for_class_subject(
+        session,
+        account.id,
+        row.class_id,
+        row.subject_id,
+        planning_period_id=row.planning_period_id,
+    )
     return row
 
 
@@ -136,17 +179,27 @@ def update_curriculum(
 def delete_curriculum(
     item_id: int,
     account_id: Optional[int] = Query(None),
+    planning_period_id: Optional[int] = Query(None),
     session: Session = Depends(get_session),
 ) -> dict:
     row = session.get(ClassSubject, item_id)
     if not row:
         raise HTTPException(status_code=404, detail="not found")
     account = resolve_account(session, account_id)
+    period = resolve_planning_period(session, account, planning_period_id)
     if row.account_id != account.id:
         raise HTTPException(status_code=403, detail="curriculum entry belongs to different account")
+    if row.planning_period_id not in (None, period.id):
+        raise HTTPException(status_code=403, detail="curriculum entry belongs to different planning period")
     class_id = row.class_id
     subject_id = row.subject_id
     session.delete(row)
     session.commit()
-    sync_requirements_for_class_subject(session, account.id, class_id, subject_id)
+    sync_requirements_for_class_subject(
+        session,
+        account.id,
+        class_id,
+        subject_id,
+        planning_period_id=period.id,
+    )
     return {"ok": True}

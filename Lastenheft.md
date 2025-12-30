@@ -25,7 +25,10 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
    - Arbeitstage / Verfügbarkeiten (Raster nach Tagen und Stunden).
    - Solver-Option, um die Arbeitstage verbindlich zu respektieren (`lehrer_arbeitstage`).
    - Pflichtanwesenheiten (z. B. Konferenzen) und Reservierungen (optional).
+   - Farbverwaltung: automatischer Farbzyklus pro Account (inkl. Import/Export) für einheitliche Lehrkraft-Badges im gesamten UI; Farbe ist editierbar und wird überall konsistent dargestellt.
+   - „Lehrkräfte-Pool“ als spezieller Datensatz (Kürzel `POOL`): unbegrenztes Deputat, von Pflichtfeldern ausgenommen, in der Oberfläche klar abgegrenzt (grau dargestellt, nicht löschbar).
    - UI: Tabellenbasierte Pflege mit Inline-Editing (Blur → sofortiges Speichern), letzte Zeile als Eingabezeile für neue Einträge.
+   - Badge-Komponente mit Kürzel-Initialen (live-Update bei Eingaben), klickbar für Detail-Overlay (Deputat, Arbeitstage usw.).
 
 3. **Fächer**
    - Fachname, Kürzel, Farbe (wird überall konsistent genutzt).
@@ -41,8 +44,9 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 ### 3.2 Planungsphase – Lehrerdeputate
 
 1. **Zuordnungs-UI (Drag & Drop)**
-   - Palette der Fächer mit Stundenumfang pro Klasse/Klassenstufe.
-   - Lehrer-Karten mit Deputats-Soll / Ist Anzeige.
+   - Dreispaltiges Layout: linke Lehrkräfte-Liste (Suchfeld, Sortierung, Kapazitätsfilter, Badges); mittlerer Bereich mit Klassenkarten und Fach-Pills; rechte Detailleiste für ausgewählte Lehrkraft (Qualifikationen, Stundenübersicht).
+   - Palette der Fächer mit Stundenumfang pro Klasse/Klassenstufe (Pills mit Reststunden, Farbkodierung nach Fach).
+   - Lehrer-Karten mit Deputats-Soll / Ist Anzeige, Badge, Progress-Indicator und Drag & Drop-Zielzone.
    - Drag & Drop von Fach-Stunden auf Lehrkräfte.
    - Automatische Aktualisierung der verbleibenden Deputatsstunden.
    - Manuelle Anpassungen (z. B. Rücknahme, Mehrfach-Zuweisungen).
@@ -108,14 +112,15 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 ## 4. UI/UX Anforderungen
 
 1. **Modulare Komponenten**
-   - `ScheduleGrid` (kompakt, farbcodiert, Icons):
-     - Tages-Leisten, Klassen-Unterspalten, Zeilen für Zeitblöcke.
-     - Zustände: Fixed (🔒), Allowed (hell), Geplanter Unterricht (bunte Fachkachel).
-     - Tooltips mit Volltext (Fach, Lehrer, Raum).
-      - Hervorhebung einzelner Lehrkräfte (Filter), auch im Bearbeitungsmodus.
-   - `DragPalette` (Filter + Chips).
-   - Status-/Toastr-Komponente für Feedback.
-   - Tab-Navigation.
+- `ScheduleGrid` (kompakt, farbcodiert, Icons):
+  - Tages-Leisten, Klassen-Unterspalten, Zeilen für Zeitblöcke.
+  - Zustände: Fixed (🔒), Allowed (hell), Geplanter Unterricht (bunte Fachkachel).
+  - Tooltips mit Volltext (Fach, Lehrer, Raum).
+   - Hervorhebung einzelner Lehrkräfte (Filter), auch im Bearbeitungsmodus.
+- `DragPalette` (Filter + Chips).
+- `TeacherBadge` (wiederverwendbarer Badge mit Kürzel/Farbe, Tooltip & Detail-Dialog).
+- Status-/Toastr-Komponente für Feedback.
+- Tab-Navigation.
 
 2. **Optik**
    - Tailwind/DaisyUI Basis.
@@ -170,30 +175,43 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 3. **Plan-Generierung** (`POST /plans/generate`): Lädt Requirements, Stammdaten und Basisplan, mappt `basisplan.data.fixed` und `basisplan.data.flexible` und übergibt alles an `solve_best_plan`. Erfolgreiche Runs persistieren Plan + Slots; Fehlschläge liefern `HTTP 422` mit `"Keine Lösung gefunden."`.
 4. **Plan-Update** (`PUT /plans/{id}`): Benennt Pläne um oder ergänzt Kommentare.
 5. **Plan-Slot-Update** (`PUT /plans/{id}/slots`): Überschreibt die Slotliste nach manuellen Anpassungen im Editor.
+   - Der Plan-Editor berücksichtigt 0-/1-basige Slot-Indizes korrekt, sodass beim Bearbeiten alle Stunden erhalten bleiben.
 
 ### 5.4 Solver-spezifische Regeln
 
 - Fixed Slots setzen harte Constraints (`== 1`) für `(fach, tag, stunde)`.
 - Flexible Gruppen erzwingen `sum(slots) == 1` pro Fach/Gruppe.
-- Klassen-Zeitfenster aus dem Basisplan sperren Slots (`basisplan_windows`).
+- Klassen-Zeitfenster aus dem Basisplan sperren Slots (`basisplan_windows`), Pausen bleiben davon unberührt.
 - Bandfächer werden parallel über Klassen gelegt; `band_lehrer_parallel` erlaubt parallelen Unterricht einer Lehrkraft.
 - Alias-Fächer (via `alias_subject_id`) teilen sich Doppelstunden- und Tagesgrenzen.
 - Lehrer-Arbeitstage (`lehrer_arbeitstage`) sperren Einsätze außerhalb hinterlegter Verfügbarkeiten.
-- „Doppelstunde = kann“ favorisiert Einzelstunden über Soft-Objectives.
+- „Doppelstunde = kann“ favorisiert Einzelstunden über Soft-Objectives; „Doppelstunde = soll“ wurde ergänzt und bestraft fehlende Doppelblöcke weich.
 - Weitere Regeln decken Tageslimits, Vormittags-/Nachmittagsgrenzen, Konfliktfreiheit und Soft-Ziele (`gleichverteilung`, Hohlstunden) ab.
+- Flexible Options-Slots wirken jetzt ausschließlich pro Requirement; andere Fächer teilen sich diese Slots wieder, damit der Solver keine unbeabsichtigten Blockaden erzeugt.
+- Optional teilnehmende Bandfächer werden über das neue Gewicht `W_BAND_OPTIONAL` bevorzugt eingeplant.
+- Hohlstunden-Regeln berücksichtigen nur noch echte Unterrichtsslots (Pausen werden ignoriert); die „Nachmittag mit freier 6. Stunde“-Logik zählt ebenfalls die realen Unterrichtsblöcke.
 
 ### 5.5 API-Endpunkte & Erweiterungen
 
-- **Aktuell verfügbar:** `/teachers`, `/classes`, `/subjects`, `/rooms`, `/requirements`, `/basisplan`, `/plans`, `/versions`, `/backup` u. a.
+- **Aktuell verfügbar (Account-kontextsensitiv):** `/teachers`, `/classes`, `/subjects`, `/rooms`, `/requirements`, `/basisplan`, `/plans`, `/versions`, `/rule-profiles`. Jeder Endpunkt erwartet einen `account_id`-Kontext (Default: erster Account) und filtert sämtliche Lese-/Schreiboperationen darauf.
+- **Export/Import-Status:** Setup-/Stundenverteilungs-/Basisplan-/Plan-Exporte sind umgesetzt (JSON). Account-Isolierung der Backups folgt in einer späteren Iteration.
 - **Geplante/teilweise implementierte Erweiterungen:**
   - Lehrer-Verfügbarkeiten als Raster (Tage × Stunden).
   - Fächer-Stundenmatrix pro Klassenstufe (Validierung offen).
   - Optionales `windows`-Feld im Basisplan für Soft-Slots.
+  - Account-spezifische Backup-/Import-Flows.
 
 ### 5.6 Autorisierung & Security
 
-- MVP ohne Authentifizierung.
-- API-Schema reserviert Felder (z. B. `owner_id`), um spätere User-/Gruppenmodelle zu ermöglichen.
+- Dev-Stand: statischer Default-Admin (`admin@example.com` / `admin`) für den ersten Account; Authentifizierung erfolgt aktuell nicht über OAuth.
+- Datenmodell unterstützt Multi-Account (Owner/Planner/Viewer) via `Account`, `User`, `AccountUser`.
+- Frontend-Login & Session-Handling stehen noch aus und werden in einer späteren Iteration umgesetzt.
+
+### 5.7 Planungsperioden & Multiuser Roadmap
+
+- Sämtliche Stammdaten- und Plan-Tabellen tragen `account_id`; der Default-Account wird beim Startup angelegt.
+- Planungsperioden (`planning_period`) werden als nächster Schritt eingeführt (Perioden je Account, optional überlappend).
+- Frontend erhält beim Einstieg eine Periode-Auswahl; sämtliche Views laden Daten ausschließlich für den aktiven Account/Periode-Kontext.
 
 ## 6. Versionierung & Deployment
 
@@ -228,6 +246,10 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 - Detailliertes Datenmodell für Lehrer-Verfügbarkeiten und Stundenbedarfe.
 - Solver-Anpassungen (Berücksichtigung neuer Constraints).
 - Umsetzungsplan / Roadmap (Milestones).
+- Account-spezifische Exporte/Importe fertigstellen (Setup, Stundenverteilung, Pläne, Basisplan).
+- Authentifizierungs- & Session-Flow implementieren (Login, JWT/OAuth, Frontend-State).
+- Planungsperioden-API (CRUD, Clone) sowie UI-Einstieg in neue Schuljahre bereitstellen.
+- Frontend: globale Account-/Perioden-Auswahl, Weitergabe von `account_id` an alle Requests.
 
 **Bekannte Einschränkungen & Ideen (aktueller Dev-Stand):**
 
@@ -239,6 +261,8 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 | Regelübersicht | Badge zeigt „Overrides“/„Params“, aber keine Details. | Tooltips oder Liste der abweichenden Keys integrieren. |
 | Persistenz Param/Rule Overrides | Aktuell In-Memory; kein Save über Reload hinaus. | Persistente Speicherung pro Version/Profil. |
 | Fehlendes Favicon | Browser 404 auf `favicon.ico`. | Datei nachlegen oder Link entfernen. |
+| Multiuser Backups | `backup/*`-Routen exportieren/importieren noch global. | Account-Filter ergänzen, UI anpassen. |
+| Frontend Auth | Noch kein Login-/Session-Handling. | Minimalen Auth-Flow ergänzen, spätere OAuth-Integration berücksichtigen. |
 
 **Nächste Schritte / Übergabe-Hinweise:**
 
@@ -247,6 +271,8 @@ Entwicklung einer webbasierten Anwendung zur Planung, Verwaltung und Erstellung 
 3. Param-/Regel-Defaults: Pro Version/Profil klare Defaults setzen (`DEFAULT_PARAMS` + Profil-Regeln).
 4. Dokumentation vertiefen: Basisplan-Datenformat (`data.fixed`/`data.flexible`) für externe Tools dokumentieren.
 5. Optional persistente Speicherung von Solver-Parametern je Planprofil / API für zuletzt genutzte Parameter schaffen.
+6. Account-/Perioden-Auswahl im Frontend implementieren und an alle Requests durchreichen.
+7. Planungsperioden-CRUD & Clone-Workflow fertigstellen, inklusive Migration bestehender Daten.
 
 ---
 

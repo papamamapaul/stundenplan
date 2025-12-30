@@ -11,16 +11,25 @@ import {
 import { fetchVersions } from '../api/versions.js';
 import { fetchPlans } from '../api/plans.js';
 import { formatError } from '../utils/ui.js';
+import { getActivePlanningPeriod } from '../store/planningPeriods.js';
 
 export function createBackupView() {
   const container = document.createElement('section');
   container.className = 'space-y-6';
-  container.innerHTML = `
-    <div class="space-y-1">
-      <h1 class="text-2xl font-semibold">Datenexport &amp; -import</h1>
-      <p class="text-sm opacity-70">Exportiere Stammdaten, Stundenverteilungen, Basispläne oder berechnete Pläne als JSON-Dateien und spiele sie bei Bedarf wieder ein.</p>
-    </div>
+  const header = document.createElement('div');
+  header.className = 'space-y-1';
+  header.innerHTML = `
+    <h1 class="text-2xl font-semibold">Datenexport &amp; -import</h1>
+    <p class="text-sm opacity-70">Exportiere Stammdaten, Stundenverteilungen, Basispläne oder berechnete Pläne als JSON-Dateien und spiele sie bei Bedarf wieder ein.</p>
   `;
+  const periodInfo = document.createElement('p');
+  periodInfo.className = 'text-xs opacity-60';
+  const activePeriod = getActivePlanningPeriod();
+  periodInfo.textContent = activePeriod
+    ? `Aktive Planungsperiode: ${activePeriod.name}`
+    : 'Keine Planungsperiode ausgewählt.';
+  header.appendChild(periodInfo);
+  container.appendChild(header);
 
   const statusBar = createStatusBar();
   container.appendChild(statusBar.element);

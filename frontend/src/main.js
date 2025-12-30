@@ -3,6 +3,8 @@ import { createNavBar } from './components/NavBar.js';
 import { createSidebar } from './components/Sidebar.js';
 import { createFooter } from './components/Footer.js';
 import { registerView } from './views/index.js';
+import { ensurePlanningPeriodsLoaded } from './store/planningPeriods.js';
+import { initAuth, getAuthState, subscribeAuth } from './store/auth.js';
 
 const THEME_KEY = 'app-theme';
 
@@ -12,8 +14,9 @@ function applyPersistedTheme() {
   document.documentElement.setAttribute('data-theme', theme);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   applyPersistedTheme();
+  await initAuth();
   const app = document.getElementById('app');
   if (!app) {
     console.error('Root container #app missing');
@@ -40,7 +43,31 @@ document.addEventListener('DOMContentLoaded', () => {
   const footer = createFooter();
   app.append(nav, layout, footer);
 
+  const updateAuthLayout = route => {
+    const normalized = route || (window.location.hash ? window.location.hash.split('?')[0] : '');
+    const isAuthMode = normalized === '#/login';
+    document.body.classList.toggle('auth-mode', isAuthMode);
+    if (typeof nav.setAuthMode === 'function') {
+      nav.setAuthMode(isAuthMode);
+    }
+  };
+
+  const routeListener = event => {
+    updateAuthLayout(event.detail?.route);
+  };
+  document.addEventListener('route-change', routeListener);
+  updateAuthLayout(window.location.hash);
+
   initRouter(content);
+  const loadPeriodsIfReady = () => {
+    const auth = getAuthState();
+    if (!auth.user) return;
+    ensurePlanningPeriodsLoaded().catch(err => {
+      console.error('Planungsperioden konnten nicht geladen werden:', err); // eslint-disable-line no-console
+    });
+  };
+  subscribeAuth(loadPeriodsIfReady);
+  loadPeriodsIfReady();
 });
 
 export { applyPersistedTheme };

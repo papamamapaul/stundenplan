@@ -1,13 +1,17 @@
+import { buildAccountQuery } from './helpers.js';
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 export async function fetchTeachers() {
-  const res = await fetch('/teachers');
+  const query = buildAccountQuery();
+  const res = await fetch(`/teachers${query}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function updateTeacher(id, payload) {
-  const res = await fetch(`/teachers/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/teachers/${id}${query}`, {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -17,7 +21,8 @@ export async function updateTeacher(id, payload) {
 }
 
 export async function createTeacher(payload) {
-  const res = await fetch('/teachers', {
+  const query = buildAccountQuery();
+  const res = await fetch(`/teachers${query}`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -27,7 +32,8 @@ export async function createTeacher(payload) {
 }
 
 export async function deleteTeacher(id) {
-  const res = await fetch(`/teachers/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/teachers/${id}${query}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error(await res.text());

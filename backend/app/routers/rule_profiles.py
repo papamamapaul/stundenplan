@@ -5,12 +5,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from ..core.security import require_active_user
 from ..database import get_session
 from ..models import RuleProfile
-from ..services.accounts import resolve_account
+from ..domain.accounts.service import resolve_account
 
 
-router = APIRouter(prefix="/rule-profiles", tags=["rule-profiles"])
+router = APIRouter(prefix="/rule-profiles", tags=["rule-profiles"], dependencies=[Depends(require_active_user)])
 
 
 @router.get("", response_model=List[RuleProfile])

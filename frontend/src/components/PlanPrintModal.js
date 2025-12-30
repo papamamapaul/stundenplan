@@ -2,7 +2,7 @@ import { createPlanGrid } from './PlanGrid.js';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 
-export function openPlanPrintModal({ plan, classes, teachers, subjects }) {
+export function openPlanPrintModal({ plan, classes, teachers, subjects, rooms, classWindows = new Map() }) {
   if (!plan || !Array.isArray(plan.slots) || !plan.slots.length) {
     console.warn('PlanPrintModal: no slots available for printing.');
   }
@@ -185,9 +185,11 @@ export function openPlanPrintModal({ plan, classes, teachers, subjects }) {
         classes,
         teachers,
         subjects,
+        rooms,
         planName,
         classIds: mode === 'classes' ? Array.from(selectedClassIds) : [],
         teacherIds: mode === 'teachers' ? Array.from(selectedTeacherIds) : [],
+        classWindows,
       });
       closeModal();
     } catch (err) {
@@ -226,16 +228,19 @@ export function openPlanPrintModal({ plan, classes, teachers, subjects }) {
   updateSelectionsVisibility();
 }
 
-function generateAndPrint({ mode, plan, classes, teachers, subjects, planName, classIds, teacherIds }) {
+function generateAndPrint({ mode, plan, classes, teachers, subjects, rooms, planName, classIds, teacherIds, classWindows }) {
   const pages = [];
   const allClassIds = Array.from(classes.keys());
 
   if (mode === 'all') {
     const grid = createPlanGrid({
       slots: plan.slots,
+      slotsMeta: plan.slotsMeta || [],
       classes,
       subjects,
       teachers,
+      rooms,
+      classWindows,
       visibleClasses: new Set(allClassIds),
     });
     pages.push(buildPage({
@@ -250,9 +255,12 @@ function generateAndPrint({ mode, plan, classes, teachers, subjects, planName, c
     classIds.forEach(classId => {
       const grid = createPlanGrid({
         slots: plan.slots,
+        slotsMeta: plan.slotsMeta || [],
         classes,
         subjects,
         teachers,
+        rooms,
+        classWindows,
         visibleClasses: new Set([classId]),
       });
       const cls = classes.get(classId);
@@ -273,6 +281,7 @@ function generateAndPrint({ mode, plan, classes, teachers, subjects, planName, c
         classes,
         subjects,
         teachers,
+        rooms,
       });
       if (!table) return;
       const teacher = teachers.get(teacherId);
@@ -387,7 +396,7 @@ function buildPrintDocument(pagesHtml) {
   `;
 }
 
-function createTeacherGrid({ teacherId, plan, classes, subjects, teachers }) {
+function createTeacherGrid({ teacherId, plan, classes, subjects, teachers, rooms }) {
   const teacher = teachers.get(teacherId);
   if (!teacher) return null;
   const teacherSlots = plan.slots.filter(slot => Number(slot.teacher_id) === Number(teacherId));
@@ -447,6 +456,13 @@ function createTeacherGrid({ teacherId, plan, classes, subjects, teachers }) {
           classLabel.className = 'text-[11px] opacity-80';
           classLabel.textContent = cls?.name || `Klasse #${slot.class_id}`;
           line.append(subjectLabel, classLabel);
+          const roomName = slot.room_name || (rooms?.get(slot.room_id)?.name);
+          if (roomName) {
+            const roomLine = document.createElement('span');
+            roomLine.className = 'text-[11px] text-blue-700';
+            roomLine.textContent = roomName;
+            line.appendChild(roomLine);
+          }
           td.appendChild(line);
           if (idx < slots.length - 1) {
             const divider = document.createElement('div');

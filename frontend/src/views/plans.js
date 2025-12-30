@@ -1,6 +1,7 @@
 import { fetchPlans, deletePlan as deletePlanApi } from '../api/plans.js';
 import { navigateTo } from '../router.js';
 import { formatError } from '../utils/ui.js';
+import { getActivePlanningPeriod } from '../store/planningPeriods.js';
 
 export function createPlanArchiveView() {
   const container = document.createElement('section');
@@ -12,6 +13,14 @@ export function createPlanArchiveView() {
     <h1 class="text-2xl font-semibold">Pläne ansehen</h1>
     <p class="text-sm opacity-70">Greife auf bereits erzeugte Pläne zu, vergleiche Varianten und öffne sie im Editor.</p>
   `;
+
+  const periodInfo = document.createElement('p');
+  periodInfo.className = 'text-xs opacity-60';
+  const activePeriod = getActivePlanningPeriod();
+  periodInfo.textContent = activePeriod
+    ? `Aktive Planungsperiode: ${activePeriod.name}`
+    : 'Keine Planungsperiode ausgewählt.';
+  header.appendChild(periodInfo);
 
   const statusBar = createStatusBar();
 

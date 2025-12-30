@@ -5,12 +5,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from ..core.security import require_active_user
 from ..database import get_session
 from ..models import Room, Subject
-from ..services.accounts import resolve_account
+from ..domain.accounts.service import resolve_account
 
 
-router = APIRouter(prefix="/rooms", tags=["rooms"])
+router = APIRouter(prefix="/rooms", tags=["rooms"], dependencies=[Depends(require_active_user)])
 
 
 @router.get("", response_model=List[Room])

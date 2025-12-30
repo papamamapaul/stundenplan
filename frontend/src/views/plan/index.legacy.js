@@ -1,86 +1,40 @@
-import { fetchPlanRules, fetchPlanDetail, generatePlan, updatePlan, updatePlanSlots } from '../api/plans.js';
-import { createPlanGrid } from '../components/PlanGrid.js';
-import { fetchRuleProfiles } from '../api/ruleProfiles.js';
-import { fetchVersions } from '../api/versions.js';
-import { fetchSubjects } from '../api/subjects.js';
-import { fetchClasses } from '../api/classes.js';
-import { fetchTeachers } from '../api/teachers.js';
-import { formatError, formModal } from '../utils/ui.js';
-import { createTabs } from '../components/Tabs.js';
-import { openPlanPrintModal } from '../components/PlanPrintModal.js';
+import { fetchPlanRules, fetchPlanDetail, generatePlan, updatePlan, updatePlanSlots } from '../../api/plans.js';
+import { createPlanGrid } from '../../components/PlanGrid.js';
+import { fetchRuleProfiles } from '../../api/ruleProfiles.js';
+import { fetchVersions } from '../../api/versions.js';
+import { fetchSubjects } from '../../api/subjects.js';
+import { fetchClasses } from '../../api/classes.js';
+import { fetchTeachers } from '../../api/teachers.js';
+import { fetchRooms } from '../../api/rooms.js';
+import { fetchBasisplan } from '../../api/basisplan.js';
+import { formatError, formModal } from '../../utils/ui.js';
+import { createTabs } from '../../components/Tabs.js';
+import { openPlanPrintModal } from '../../components/PlanPrintModal.js';
+import { getActivePlanningPeriod, ensurePlanningPeriodsLoaded, subscribePlanningPeriods } from '../../store/planningPeriods.js';
+import { buildAccountQuery } from '../../api/helpers.js';
+import { navigateTo } from '../../router.js';
+import {
+  DAYS,
+  STUNDEN,
+  DAY_LABELS,
+  DEFAULT_PARAMS,
+  RULE_DEFAULTS_STORAGE_KEY,
+  RULE_GROUPS,
+  RULE_EXTRAS,
+  defaultPlanName,
+} from './constants.js';
+import { createInitialPlanState } from './state.js';
+import { createPlanToolbar, updatePlanToolbar } from './components/toolbar.js';
+import { createRunSummarySection } from './components/runSummary.js';
 
-const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
-const STUNDEN = Array.from({ length: 8 }, (_, idx) => idx + 1);
-const DAY_LABELS = {
-  Mo: 'Montag',
-  Di: 'Dienstag',
-  Mi: 'Mittwoch',
-  Do: 'Donnerstag',
-  Fr: 'Freitag',
+const BASISPLAN_DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri'];
+const BASISPLAN_DAY_TO_TAG = {
+  mon: 'Mo',
+  tue: 'Di',
+  wed: 'Mi',
+  thu: 'Do',
+  fri: 'Fr',
 };
-const DEFAULT_PARAMS = {
-  multi_start: true,
-  max_attempts: 10,
-  patience: 3,
-  time_per_attempt: 5.0,
-  randomize_search: true,
-  base_seed: 42,
-  seed_step: 17,
-  use_value_hints: true,
-};
-
-const RULE_DEFAULTS_STORAGE_KEY = 'plan-view-rule-defaults-v1';
-
-const RULE_GROUPS = [
-  {
-    id: 'core',
-    label: 'Basisregeln',
-    description: 'Sorgt dafür, dass alle Anforderungen ohne Konflikte erfüllt werden.',
-    keys: ['stundenbedarf_vollstaendig', 'keine_lehrerkonflikte', 'keine_klassenkonflikte', 'raum_verfuegbarkeit'],
-  },
-  {
-    id: 'basisplan',
-    label: 'Basisplan & Rahmen',
-    description: 'Übernimmt Vorgaben aus dem Basisplan und legt Nachmittagsfenster fest.',
-    keys: ['basisplan_fixed', 'basisplan_flexible', 'basisplan_windows', 'nachmittag_pause_stunde'],
-  },
-  {
-    id: 'struktur',
-    label: 'Tagesstruktur',
-    description: 'Regelt Grenzen je Tag und besondere Vorgaben für Vormittag/Nachmittag.',
-    keys: ['stundenbegrenzung', 'stundenbegrenzung_erste_stunde', 'mittagsschule_vormittag', 'fach_nachmittag_regeln'],
-  },
-  {
-    id: 'unterricht',
-    label: 'Unterrichtsblöcke',
-    description: 'Definiert Regeln für Doppelstunden und Bandunterrichte.',
-    keys: ['doppelstundenregel', 'einzelstunde_nur_rand', 'bandstunden_parallel', 'band_lehrer_parallel'],
-  },
-  {
-    id: 'verteilung',
-    label: 'Verteilung & Hohlstunden',
-    description: 'Steuert Lücken in Klassenstunden und die Gleichverteilung über die Woche.',
-    keys: ['keine_hohlstunden', 'keine_hohlstunden_hard', 'gleichverteilung'],
-  },
-  {
-    id: 'lehrer',
-    label: 'Lehrkräfte',
-    description: 'Optimiert Freistunden von Lehrkräften.',
-    keys: ['lehrer_arbeitstage', 'lehrer_hohlstunden_soft'],
-  },
-];
-
-const RULE_EXTRAS = {
-  keine_hohlstunden: ['W_GAPS_START', 'W_GAPS_INSIDE'],
-  gleichverteilung: ['W_EVEN_DIST'],
-  doppelstundenregel: ['W_EINZEL_KANN'],
-  lehrer_hohlstunden_soft: ['TEACHER_GAPS_DAY_MAX', 'TEACHER_GAPS_WEEK_MAX', 'W_TEACHER_GAPS'],
-};
-
-function defaultPlanName() {
-  const now = new Date();
-  return `Plan ${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-}
 
 export function createPlanView() {
   const hash = window.location.hash || '';
@@ -97,6 +51,14 @@ export function createPlanView() {
     <p class="text-sm opacity-70">Wähle eine Stundenverteilung, konfiguriere Regeln und generiere Planvarianten.</p>
   `;
 
+  const periodInfo = document.createElement('p');
+  periodInfo.className = 'text-xs opacity-60';
+  const activePeriod = getActivePlanningPeriod();
+  periodInfo.textContent = activePeriod
+    ? `Aktive Planungsperiode: ${activePeriod.name}`
+    : 'Keine Planungsperiode ausgewählt.';
+  header.appendChild(periodInfo);
+
   const statusBar = createStatusBar();
 
   const versionSelect = document.createElement('select');
@@ -105,47 +67,61 @@ export function createPlanView() {
   const ruleProfileSelect = document.createElement('select');
   ruleProfileSelect.className = 'select select-bordered w-full';
 
-  const configCard = document.createElement('article');
-  configCard.className = 'card bg-base-100 shadow-sm border border-base-200';
-  const configBody = document.createElement('div');
-  configBody.className = 'card-body space-y-6';
-  configCard.appendChild(configBody);
+  const sidebar = document.createElement('aside');
+  sidebar.className = 'w-full xl:w-80 bg-white border border-gray-200 rounded-xl flex flex-col shadow-sm';
 
-  const configIntro = document.createElement('div');
-  configIntro.className = 'space-y-1';
-  configIntro.innerHTML = `
-    <h2 class="card-title text-lg">1. Regeln & Gewichtungen festlegen</h2>
-    <p class="text-sm opacity-70">Wähle zunächst die zugrunde liegende Stundenverteilung und passe anschließend Regeln sowie Gewichtungen an.</p>
+  const sidebarHeader = document.createElement('div');
+  sidebarHeader.className = 'p-4 border-b border-gray-200 space-y-4 bg-white';
+  sidebar.appendChild(sidebarHeader);
+
+  const headerIntro = document.createElement('div');
+  headerIntro.className = 'space-y-1';
+  headerIntro.innerHTML = `
+    <h2 class="text-base font-semibold text-gray-900">Regeln & Parameter</h2>
+    <p class="text-xs text-gray-500">Stundenverteilung wählen, Regeln anpassen und den Solver starten.</p>
   `;
-  configBody.appendChild(configIntro);
+  sidebarHeader.appendChild(headerIntro);
 
-  const selectionGrid = document.createElement('div');
-  selectionGrid.className = 'grid gap-4 lg:grid-cols-2';
-  selectionGrid.append(
-    createField('Stundenverteilung', versionSelect),
-    createField('Regelprofil', ruleProfileSelect),
-  );
-  configBody.appendChild(selectionGrid);
+  const selectionWrap = document.createElement('div');
+  selectionWrap.className = 'space-y-3';
+  sidebarHeader.appendChild(selectionWrap);
 
-  const rulesContainer = document.createElement('div');
-  rulesContainer.className = 'space-y-6';
-  configBody.appendChild(rulesContainer);
+  const versionField = document.createElement('label');
+  versionField.className = 'flex flex-col gap-1 text-sm text-gray-700';
+  const versionLabel = document.createElement('span');
+  versionLabel.className = 'font-medium';
+  versionLabel.textContent = 'Stundenverteilung';
+  versionSelect.className = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent';
+  versionField.append(versionLabel, versionSelect);
 
-  const configFooter = document.createElement('div');
-  configFooter.className = 'flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-2';
+  const ruleProfileField = document.createElement('label');
+  ruleProfileField.className = 'flex flex-col gap-1 text-sm text-gray-700';
+  const ruleProfileLabel = document.createElement('span');
+  ruleProfileLabel.className = 'font-medium';
+  ruleProfileLabel.textContent = 'Regelprofil';
+  ruleProfileSelect.className = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent';
+  ruleProfileField.append(ruleProfileLabel, ruleProfileSelect);
+
+  selectionWrap.append(versionField, ruleProfileField);
 
   const infoWrap = document.createElement('div');
-  infoWrap.className = 'flex flex-col gap-2';
+  infoWrap.className = 'space-y-2';
   const badgeWrap = document.createElement('div');
-  badgeWrap.className = 'flex flex-wrap items-center gap-2';
+  badgeWrap.className = 'flex flex-wrap items-center gap-2 text-xs';
   infoWrap.appendChild(badgeWrap);
-  configFooter.appendChild(infoWrap);
+  sidebarHeader.appendChild(infoWrap);
 
   const actionsWrap = document.createElement('div');
-  actionsWrap.className = 'flex flex-wrap items-center gap-3';
-  configFooter.appendChild(actionsWrap);
+  actionsWrap.className = 'flex flex-col gap-2';
+  sidebarHeader.appendChild(actionsWrap);
 
-  configBody.appendChild(configFooter);
+  const sidebarContent = document.createElement('div');
+  sidebarContent.className = 'flex-1 overflow-y-auto bg-gray-50 p-4 space-y-3';
+  sidebar.appendChild(sidebarContent);
+
+  const rulesContainer = document.createElement('div');
+  rulesContainer.className = 'space-y-3';
+  sidebarContent.appendChild(rulesContainer);
 
   const resultsSection = document.createElement('div');
   resultsSection.className = 'space-y-4';
@@ -166,10 +142,8 @@ export function createPlanView() {
 
   tabContent.append(resultsSection, analysisSection);
 
-  const debugCard = document.createElement('article');
-  debugCard.className = 'card bg-base-100 shadow-sm border border-dashed border-base-300';
-  const debugBody = document.createElement('div');
-  debugBody.className = 'card-body space-y-4';
+  const debugSection = document.createElement('section');
+  debugSection.className = 'rounded-lg border border-dashed border-gray-300 bg-white/80 p-4 space-y-3';
   const debugHeader = document.createElement('div');
   debugHeader.className = 'flex items-start justify-between gap-3';
   const debugTitleWrap = document.createElement('div');
@@ -178,7 +152,7 @@ export function createPlanView() {
   debugTitle.className = 'text-lg font-semibold';
   debugTitle.textContent = 'Solver-Diagnose';
   const debugText = document.createElement('p');
-  debugText.className = 'text-xs opacity-70 max-w-xl';
+  debugText.className = 'text-xs text-gray-600 max-w-sm';
   debugText.textContent = 'Starte Trockenläufe, um zu prüfen, welche Regel-Kombination eine Lösung verhindert. Jeder Lauf nutzt die aktuelle Stundenverteilung und speichert keinen Plan.';
   debugTitleWrap.append(debugTitle, debugText);
 
@@ -189,102 +163,94 @@ export function createPlanView() {
   debugHeader.append(debugTitleWrap, debugButton);
 
   const debugStatus = document.createElement('p');
-  debugStatus.className = 'text-xs opacity-70';
+  debugStatus.className = 'text-xs text-gray-500';
   debugStatus.textContent = 'Noch kein Debug-Lauf gestartet.';
 
   const debugResults = document.createElement('div');
   debugResults.className = 'overflow-x-auto';
 
-  debugBody.append(debugHeader, debugStatus, debugResults);
-  debugCard.append(debugBody);
+  debugSection.append(debugHeader, debugStatus, debugResults);
 
   const solverContainer = document.createElement('div');
-  solverContainer.className = 'space-y-4';
-
-  const advancedCard = document.createElement('article');
-  advancedCard.className = 'card bg-base-100 shadow-sm border border-base-200';
-  const advancedBody = document.createElement('div');
-  advancedBody.className = 'card-body space-y-4';
+  solverContainer.className = 'space-y-3';
 
   const advancedDetails = document.createElement('details');
-  advancedDetails.className = 'collapse collapse-arrow bg-base-200/60 rounded-xl';
+  advancedDetails.className = 'rounded-lg border border-gray-200 bg-white';
   const advancedSummary = document.createElement('summary');
-  advancedSummary.className = 'collapse-title text-sm font-semibold cursor-pointer';
-  advancedSummary.textContent = '2. Erweiterte Einstellungen & Regelsimulation';
+  advancedSummary.className = 'flex items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-gray-800 cursor-pointer select-none';
+  advancedSummary.style.listStyle = 'none';
+  advancedSummary.style.outline = 'none';
+  const advancedLabel = document.createElement('span');
+  advancedLabel.textContent = 'Erweiterte Einstellungen & Regelsimulation';
+  const advancedIcon = document.createElement('span');
+  advancedIcon.className = 'text-gray-400 transition-transform duration-200';
+  advancedIcon.textContent = '▾';
+  advancedSummary.append(advancedLabel, advancedIcon);
   const advancedContent = document.createElement('div');
-  advancedContent.className = 'collapse-content space-y-6';
-  advancedContent.appendChild(solverContainer);
-  const debugWrap = document.createElement('div');
-  debugWrap.appendChild(debugCard);
-  advancedContent.appendChild(debugWrap);
+  advancedContent.className = 'px-4 pb-4 space-y-3 text-sm';
+  advancedContent.append(solverContainer, debugSection);
   advancedDetails.append(advancedSummary, advancedContent);
-  advancedBody.appendChild(advancedDetails);
-  advancedCard.appendChild(advancedBody);
+  advancedIcon.style.transform = 'rotate(0deg)';
+  advancedDetails.addEventListener('toggle', () => {
+    advancedIcon.style.transform = advancedDetails.open ? 'rotate(180deg)' : 'rotate(0deg)';
+  });
 
-  container.append(header, statusBar.element, configCard, advancedCard, tabs.nav, tabContent);
+  sidebarContent.appendChild(advancedDetails);
 
-  const state = {
-    loading: false,
-    generating: false,
-    versions: [],
-    selectedVersionId: null,
-    ruleProfiles: [],
-    selectedRuleProfileId: null,
-    rulesDefinition: null,
-    ruleBaseBools: new Map(),
-    ruleBaseWeights: new Map(),
-    ruleValuesBools: new Map(),
-    ruleValuesWeights: new Map(),
-    ruleDefinitionByKey: new Map(),
-    ruleExtraContainers: new Map(),
-    ruleBackendDefaultsBools: new Map(),
-    ruleBackendDefaultsWeights: new Map(),
-    planName: defaultPlanName(),
-    planComment: '',
-    generatedPlans: [],
-    lastPlanId: null,
-    subjects: new Map(),
-    classes: new Map(),
-    teachers: new Map(),
-    boolInputs: new Map(),
-    weightInputs: new Map(),
-    params: { ...DEFAULT_PARAMS },
-    paramInputs: new Map(),
-    analysis: null,
-    analysisError: null,
-    activeTab: 'results',
-    debugRuns: [],
-    debugRunning: false,
-    debugStale: true,
-    visibleClasses: new Set(),
+  const layout = document.createElement('div');
+  layout.className = 'plan-view-layout';
+
+  const planColumn = document.createElement('div');
+  planColumn.className = 'space-y-6';
+  const planToolbar = createPlanToolbar(tabs);
+  planColumn.append(planToolbar.element, tabs.nav, tabContent);
+
+  const detailsColumn = document.createElement('div');
+  detailsColumn.className = 'space-y-6';
+
+  const { aside: summaryAside, refs: summaryRefs } = createRunSummarySection();
+  detailsColumn.appendChild(summaryAside);
+
+  layout.append(sidebar, planColumn, detailsColumn);
+
+  container.append(header, statusBar.element, layout);
+
+  const runSummaryRefs = summaryRefs;
+
+  const state = createInitialPlanState({
     initialPlanId,
-    ruleGroupSections: new Map(),
-    ruleGroupCollapsed: new Map(),
-    editing: null,
-    editingParkingSeq: 0,
-    dragPayload: null,
-    highlightedTeacherId: null,
-  };
+    planToolbar,
+    runSummaryRefs,
+  });
 
   const progressModal = createProgressModal();
 
+  planToolbar.primaryButton.addEventListener('click', async () => {
+    if (state.generating) return;
+    if (!state.selectedVersionId) {
+      statusBar.set('Bitte zuerst eine Stundenverteilung auswählen.', true);
+      return;
+    }
+    await handleGenerate();
+  });
+
   const rulesProfileBadge = document.createElement('span');
-  rulesProfileBadge.className = 'badge badge-outline';
+  rulesProfileBadge.className = 'badge badge-sm badge-outline';
   rulesProfileBadge.textContent = 'Profil: Standard';
 
   const rulesOverridesBadge = document.createElement('span');
-  rulesOverridesBadge.className = 'badge badge-outline';
+  rulesOverridesBadge.className = 'badge badge-sm badge-outline';
   rulesOverridesBadge.textContent = 'Overrides: 0';
 
   const rulesSummaryInfo = document.createElement('p');
-  rulesSummaryInfo.className = 'text-xs opacity-60';
+  rulesSummaryInfo.className = 'text-xs text-gray-500';
   rulesSummaryInfo.textContent = 'Regelprofil bestimmt die Ausgangswerte. Änderungen gelten nur für die nächste Berechnung.';
   infoWrap.appendChild(rulesSummaryInfo);
   badgeWrap.append(rulesProfileBadge, rulesOverridesBadge);
 
   const generateButton = document.createElement('button');
   generateButton.type = 'button';
-  generateButton.className = 'btn btn-primary';
+  generateButton.className = 'btn btn-primary btn-sm w-full';
   generateButton.textContent = 'Plan erstellen';
   actionsWrap.appendChild(generateButton);
 
@@ -300,6 +266,7 @@ export function createPlanView() {
     syncParamControls();
     updateRulesSummary();
     markDebugStale();
+    refreshToolbar();
   });
 
   ruleProfileSelect.addEventListener('change', () => {
@@ -309,6 +276,7 @@ export function createPlanView() {
     syncRuleControls();
     updateRulesSummary();
     markDebugStale();
+    refreshToolbar();
   });
 
   generateButton.addEventListener('click', async () => {
@@ -344,6 +312,14 @@ export function createPlanView() {
     await runRuleDiagnostics();
   });
 
+  const unsubscribePlanningPeriods = subscribePlanningPeriods(({ activeId }) => {
+    if (state.loading) return;
+    if (state.activePlanningPeriodId === activeId) return;
+    state.activePlanningPeriodId = activeId;
+    refreshToolbar();
+    reloadVersions();
+  });
+
   initialize().catch(err => {
     statusBar.set(`Fehler beim Laden: ${formatError(err)}`, true);
   });
@@ -352,13 +328,18 @@ export function createPlanView() {
     statusBar.set('Lade Daten…');
     state.loading = true;
     try {
-      const [versions, rules, profiles, subjects, classes, teachers] = await Promise.all([
+      await ensurePlanningPeriodsLoaded();
+      const activePeriod = getActivePlanningPeriod();
+      state.activePlanningPeriodId = activePeriod?.id ?? null;
+      const [versions, rules, profiles, subjects, classes, teachers, rooms, basisplan] = await Promise.all([
         fetchVersions(),
         fetchPlanRules(),
         fetchRuleProfiles(),
         fetchSubjects(),
         fetchClasses(),
         fetchTeachers(),
+        fetchRooms(),
+        fetchBasisplan(),
       ]);
       state.versions = versions;
       state.selectedVersionId = versions[0]?.id ?? null;
@@ -374,6 +355,8 @@ export function createPlanView() {
       state.subjects = new Map(subjects.map(sub => [sub.id, sub]));
       state.classes = new Map(classes.map(cls => [cls.id, cls]));
       state.teachers = new Map(teachers.map(t => [t.id, t]));
+      state.rooms = new Map(rooms.map(room => [room.id, room]));
+      state.classWindows = buildClassWindowsMap(basisplan?.data, classes);
       state.visibleClasses = new Set(classes.map(cls => cls.id));
 
       initializeRuleValues();
@@ -392,6 +375,7 @@ export function createPlanView() {
       await loadAnalysis();
       renderAnalysis();
       renderDebugResults();
+      refreshToolbar();
       statusBar.set('Daten geladen.');
       setTimeout(statusBar.clear, 1200);
     } catch (err) {
@@ -426,12 +410,13 @@ export function createPlanView() {
         {
           id: detail.id,
           status: detail.status,
-          score: detail.score,
-          objective_value: detail.objective_value,
-          slots: detail.slots || [],
-          name: state.planName,
-          comment: state.planComment,
-          versionId: detail.version_id,
+        score: detail.score,
+        objective_value: detail.objective_value,
+        slots: detail.slots || [],
+        slotsMeta: detail.slots_meta || [],
+        name: state.planName,
+        comment: state.planComment,
+        versionId: detail.version_id,
           createdAt,
           ruleKeysActive: detail.rule_keys_active || [],
           rulesSnapshot: detail.rules_snapshot || {},
@@ -449,6 +434,23 @@ export function createPlanView() {
       setTimeout(statusBar.clear, 1500);
     } catch (err) {
       statusBar.set(`Plan konnte nicht geladen werden: ${formatError(err)}`, true);
+    }
+  }
+
+  async function reloadVersions() {
+    try {
+      const versions = await fetchVersions();
+      state.versions = versions;
+      if (!versions.length) {
+        state.selectedVersionId = null;
+      } else if (!state.selectedVersionId || !versions.some(v => v.id === state.selectedVersionId)) {
+        state.selectedVersionId = versions[0]?.id ?? null;
+      }
+      renderVersionOptions();
+      renderResults();
+      updateRulesSummary();
+    } catch (err) {
+      statusBar.set(`Stundenverteilungen konnten nicht geladen werden: ${formatError(err)}`, true);
     }
   }
 
@@ -630,49 +632,49 @@ export function createPlanView() {
 
     rulesContainer.innerHTML = '';
     const grid = document.createElement('div');
-    grid.className = 'grid gap-6 lg:grid-cols-2';
+    grid.className = 'space-y-3';
 
     RULE_GROUPS.forEach(group => {
       const availableKeys = group.keys.filter(key => state.ruleDefinitionByKey.has(key));
       if (!availableKeys.length) return;
 
-      const list = document.createElement('div');
-      list.className = 'space-y-3';
-      availableKeys.forEach(key => {
-        const entry = createRuleEntry(key);
-        if (entry) list.appendChild(entry);
-      });
-      if (!list.childElementCount) return;
-
       const card = document.createElement('article');
-      card.className = 'border border-base-200 rounded-xl bg-base-100 shadow-sm overflow-hidden';
+      card.className = 'rounded-lg border border-gray-200 bg-white overflow-hidden';
 
       const headerButton = document.createElement('button');
       headerButton.type = 'button';
-      headerButton.className = 'flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-base-200/60 focus:outline-none';
+      headerButton.className = 'flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-gray-100 focus:outline-none';
 
       const headerContent = document.createElement('div');
-      headerContent.className = 'space-y-1';
+      headerContent.className = 'space-y-0.5';
       const heading = document.createElement('h3');
-      heading.className = 'text-sm font-semibold uppercase tracking-wide';
+      heading.className = 'text-xs font-semibold uppercase tracking-wide text-gray-600';
       heading.textContent = group.label;
       headerContent.appendChild(heading);
       if (group.description) {
         const desc = document.createElement('p');
-        desc.className = 'text-xs opacity-70';
+        desc.className = 'text-xs text-gray-500';
         desc.textContent = group.description;
         headerContent.appendChild(desc);
       }
 
       const chevron = document.createElement('span');
-      chevron.className = 'text-lg transition-transform duration-200';
+      chevron.className = 'text-sm text-gray-400 transition-transform duration-200';
       chevron.textContent = '▾';
 
       headerButton.append(headerContent, chevron);
       card.appendChild(headerButton);
 
+      const list = document.createElement('div');
+      list.className = 'space-y-2.5';
+      availableKeys.forEach(key => {
+        const entry = createRuleEntry(key, headerButton);
+        if (entry) list.appendChild(entry);
+      });
+      if (!list.childElementCount) return;
+
       const content = document.createElement('div');
-      content.className = 'px-4 pb-4 space-y-4 border-t border-base-200';
+      content.className = 'px-3 pb-3 space-y-3 border-t border-gray-100 bg-white';
       content.appendChild(list);
       card.appendChild(content);
 
@@ -732,32 +734,33 @@ export function createPlanView() {
     });
   }
 
-  function createRuleEntry(ruleKey) {
+  function createRuleEntry(ruleKey, parentHeaderButton) {
     const ruleDef = state.ruleDefinitionByKey.get(ruleKey);
     if (!ruleDef) return null;
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'space-y-2 rounded-lg border border-base-200 bg-base-100/70 p-3';
+    wrapper.className = 'space-y-2 rounded-md border border-gray-200 bg-white/80 p-2.5';
 
     const header = document.createElement('div');
     header.className = 'flex items-start justify-between gap-3';
 
     const textWrap = document.createElement('div');
-    textWrap.className = 'space-y-1';
+    textWrap.className = 'space-y-0.5';
     const title = document.createElement('span');
-    title.className = 'font-medium text-sm';
+    title.className = 'text-sm font-medium text-gray-900';
     title.textContent = ruleDef.label || ruleKey;
-    textWrap.appendChild(title);
     if (ruleDef.info) {
-      const desc = document.createElement('p');
-      desc.className = 'text-xs opacity-70';
-      desc.textContent = ruleDef.info;
-      textWrap.appendChild(desc);
+      title.title = ruleDef.info;
+      header.title = ruleDef.info;
+      if (parentHeaderButton) {
+        parentHeaderButton.title = ruleDef.info;
+      }
     }
+    textWrap.appendChild(title);
 
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
-    toggle.className = 'toggle toggle-primary';
+    toggle.className = 'toggle toggle-sm toggle-primary';
     toggle.dataset.ruleKey = ruleKey;
     toggle.addEventListener('change', () => {
       state.ruleValuesBools.set(ruleKey, toggle.checked);
@@ -773,7 +776,7 @@ export function createPlanView() {
     const extraKeys = RULE_EXTRAS[ruleKey] || [];
     if (extraKeys.length) {
       const extras = document.createElement('div');
-      extras.className = 'space-y-3 border-l border-base-200 pl-4';
+      extras.className = 'space-y-2 border-l border-gray-200 pl-3';
       extraKeys.forEach(weightKey => {
         const control = createInlineWeightControl(weightKey);
         if (control) extras.appendChild(control);
@@ -795,23 +798,22 @@ export function createPlanView() {
     block.className = 'space-y-1';
 
     const labelRow = document.createElement('div');
-    labelRow.className = 'flex items-center justify-between text-xs font-medium';
+    labelRow.className = 'flex items-center justify-between text-xs font-medium text-gray-600';
     const labelText = document.createElement('span');
     labelText.textContent = weightDef.label || weightKey;
     const valueLabel = document.createElement('span');
-    valueLabel.className = 'text-xs opacity-70';
+    valueLabel.className = 'text-xs text-gray-500';
     labelRow.append(labelText, valueLabel);
     block.appendChild(labelRow);
 
     if (weightDef.info) {
-      const info = document.createElement('p');
-      info.className = 'text-xs opacity-60';
-      info.textContent = weightDef.info;
-      block.appendChild(info);
+      labelRow.title = weightDef.info;
+      labelText.title = weightDef.info;
+      valueLabel.title = weightDef.info;
     }
 
     const controls = document.createElement('div');
-    controls.className = 'flex items-center gap-2';
+    controls.className = 'flex items-center gap-2 text-xs';
 
     const min = weightDef.min ?? 0;
     const max = weightDef.max ?? 50;
@@ -825,7 +827,7 @@ export function createPlanView() {
 
     const number = document.createElement('input');
     number.type = 'number';
-    number.className = 'input input-xs input-bordered w-20';
+    number.className = 'input input-xs input-bordered w-16';
     number.min = String(min);
     number.max = String(max);
     number.step = '1';
@@ -945,25 +947,57 @@ export function createPlanView() {
     generateButton.disabled = true;
     saveButton.disabled = true;
     progressModal.showLoading();
+    refreshToolbar();
+    renderRunSummary();
     try {
-      state.planName = defaultPlanName();
-      state.planComment = '';
+      const baseName = defaultPlanName();
+      const planComment = '';
+      state.planName = baseName;
+      state.planComment = planComment;
       const overrides = buildOverrides();
-      const payload = {
-        name: state.planName,
-        comment: state.planComment || null,
+      const overridePayload = Object.keys(overrides).length ? overrides : null;
+      const paramsSnapshot = { ...state.params };
+      const basePayload = {
+        comment: planComment ? planComment : null,
         version_id: state.selectedVersionId,
         rule_profile_id: state.selectedRuleProfileId,
-        override_rules: Object.keys(overrides).length ? overrides : null,
-        params: { ...state.params },
+        override_rules: overridePayload,
+        params: paramsSnapshot,
       };
-      const response = await generatePlan(payload);
+      let finalPlanName = baseName;
+
+      const attemptGenerate = async (attempt = 1) => {
+        const candidateName = attempt === 1 ? baseName : `${baseName} (${attempt})`;
+        try {
+          const response = await generatePlan({
+            ...basePayload,
+            name: candidateName,
+            params: { ...basePayload.params },
+          });
+          finalPlanName = candidateName;
+          return response;
+        } catch (err) {
+          const message = formatError(err);
+          if (
+            typeof message === 'string' &&
+            message.toLowerCase().includes('planname bereits vergeben') &&
+            attempt < 5
+          ) {
+            return attemptGenerate(attempt + 1);
+          }
+          throw err;
+        }
+      };
+
+      const response = await attemptGenerate();
+      state.planName = finalPlanName;
       const planEntry = {
         id: response.plan_id,
         status: response.status,
         score: response.score,
         objective_value: response.objective_value,
         slots: response.slots || [],
+        slotsMeta: response.slots_meta || [],
         name: state.planName,
         comment: state.planComment,
         versionId: state.selectedVersionId,
@@ -1002,6 +1036,8 @@ export function createPlanView() {
       if (!progressModal.isOpen()) {
         saveButton.disabled = !state.lastPlanId;
       }
+      refreshToolbar();
+      renderRunSummary();
     }
   }
 
@@ -1234,9 +1270,17 @@ export function createPlanView() {
       return acc + (DEFAULT_PARAMS[key] === state.params[key] ? 0 : 1);
     }, 0);
     rulesOverridesBadge.textContent = `Overrides: ${ruleCount} • Params: ${paramCount}`;
+    renderRunSummary();
+    refreshToolbar();
+  }
+
+  function refreshToolbar() {
+    updatePlanToolbar(state.planToolbar, state);
   }
 
   function renderResults() {
+    refreshToolbar();
+    renderRunSummary();
     resultsSection.innerHTML = '';
     renderEditingSection();
     if (editingSection.parentElement !== resultsSection) {
@@ -1244,6 +1288,8 @@ export function createPlanView() {
     } else if (!state.editing) {
       editingSection.classList.add('hidden');
     }
+
+    renderRunSummary();
 
     if (!state.generatedPlans.length) {
       const empty = document.createElement('div');
@@ -1346,6 +1392,8 @@ export function createPlanView() {
             classes: state.classes,
             teachers: state.teachers,
             subjects: state.subjects,
+            rooms: state.rooms,
+            classWindows: state.classWindows,
           });
         });
       }
@@ -1360,9 +1408,12 @@ export function createPlanView() {
 
       body.appendChild(createPlanGrid({
         slots: entry.slots,
+        slotsMeta: entry.slotsMeta || [],
         classes: state.classes,
         subjects: state.subjects,
         teachers: state.teachers,
+        rooms: state.rooms,
+        classWindows: state.classWindows,
         visibleClasses: state.visibleClasses,
         highlightedTeacherId: state.highlightedTeacherId,
       }));
@@ -1370,6 +1421,137 @@ export function createPlanView() {
       card.appendChild(body);
       resultsSection.appendChild(card);
     });
+  }
+
+  function renderRunSummary() {
+    const summary = state.runSummary;
+    if (!summary) return;
+
+    const {
+      headerBadge,
+      headerTitle,
+      headerSubtitle,
+      headerMeta,
+      headerButton,
+      statusValue,
+      statusTimestamp,
+      rulesContainer,
+      rulesPlaceholder,
+      metaEntries,
+    } = summary;
+
+    const planEntry = state.generatedPlans[0] || null;
+    const statusBaseClass = 'text-sm font-semibold';
+
+    const selectedVersionName = state.selectedVersionId
+      ? state.versions.find(v => v.id === state.selectedVersionId)?.name || `Version #${state.selectedVersionId}`
+      : null;
+    const planVersionName = planEntry?.versionId != null
+      ? state.versions.find(v => v.id === planEntry.versionId)?.name || `Version #${planEntry.versionId}`
+      : selectedVersionName;
+    const profileName = state.ruleProfiles.find(p => p.id === state.selectedRuleProfileId)?.name || 'Standard';
+
+    const badgeSource = planEntry?.name || planVersionName || 'Plan';
+    const initials = badgeSource ? badgeSource.replace(/\s+/g, '').slice(0, 2).toUpperCase() : '';
+    headerBadge.textContent = initials || 'PL';
+    headerTitle.textContent = 'Plan-Details';
+    headerSubtitle.textContent = planEntry?.name || 'Noch kein Plan';
+    headerMeta.textContent = planEntry ? `Plan-ID: ${planEntry.id ?? '—'}` : `Stundenverteilung: ${planVersionName ?? '—'}`;
+
+    headerButton.disabled = false;
+    headerButton.onclick = null;
+    if (planEntry) {
+      headerButton.textContent = 'Plan bearbeiten';
+      headerButton.onclick = () => startEditingPlan(planEntry);
+      headerMeta.textContent = `Plan-ID: ${planEntry.id ?? '—'} • ${planVersionName ?? '—'}`;
+    } else {
+      headerButton.textContent = 'Planliste';
+      headerButton.onclick = () => navigateTo('#/plans');
+    }
+
+    const meta = metaEntries || new Map();
+    if (meta.has('version')) meta.get('version').textContent = planVersionName ?? '—';
+    if (meta.has('profile')) meta.get('profile').textContent = profileName ?? '—';
+
+    if (state.generating) {
+      statusValue.textContent = 'Berechnung läuft…';
+      statusValue.className = `${statusBaseClass} text-blue-600`;
+      statusTimestamp.textContent = planEntry ? 'Solver aktiv – letzter Stand folgt…' : 'Solver aktiv …';
+    }
+
+    if (!planEntry) {
+      if (!state.generating) {
+        statusValue.textContent = 'Keine Berechnung';
+        statusValue.className = `${statusBaseClass} text-gray-900`;
+        statusTimestamp.textContent = '—';
+      }
+      if (meta.has('planId')) meta.get('planId').textContent = '—';
+      if (meta.has('score')) meta.get('score').textContent = '—';
+      if (meta.has('objective')) meta.get('objective').textContent = '—';
+      if (meta.has('generated')) meta.get('generated').textContent = '—';
+      if (meta.has('comment')) meta.get('comment').textContent = '—';
+      rulesContainer.innerHTML = '';
+      rulesPlaceholder.textContent = 'Noch kein Plan berechnet.';
+      rulesContainer.appendChild(rulesPlaceholder);
+      return;
+    }
+
+    const createdAt = planEntry.createdAt instanceof Date
+      ? planEntry.createdAt
+      : (planEntry.createdAt ? new Date(planEntry.createdAt) : null);
+
+    if (meta.has('planId')) meta.get('planId').textContent = planEntry.id ? `#${planEntry.id}` : '—';
+    if (meta.has('score')) meta.get('score').textContent = planEntry.score != null ? planEntry.score.toFixed(2) : '—';
+    if (meta.has('objective')) {
+      const objective = planEntry.objective_value;
+      meta.get('objective').textContent = objective != null ? Number(objective).toFixed(2) : '—';
+    }
+    if (meta.has('generated')) {
+      meta.get('generated').textContent = createdAt ? formatSummaryDate(createdAt) : '—';
+    }
+    if (meta.has('comment')) meta.get('comment').textContent = planEntry.comment?.trim() || '—';
+
+    if (!state.generating) {
+      const normalizedStatus = (planEntry.status || '').toLowerCase();
+      let statusClass = 'text-emerald-600';
+      if (normalizedStatus.includes('fehl') || normalizedStatus.includes('error')) {
+        statusClass = 'text-error';
+      } else if (normalizedStatus.includes('warn') || normalizedStatus.includes('warte') || normalizedStatus.includes('pending')) {
+        statusClass = 'text-yellow-600';
+      }
+      statusValue.textContent = planEntry.status || 'Plan erstellt';
+      statusValue.className = `${statusBaseClass} ${statusClass}`;
+      statusTimestamp.textContent = createdAt ? `Berechnet am ${formatSummaryDate(createdAt)}` : '—';
+    } else if (createdAt) {
+      statusTimestamp.textContent = `Letzter Lauf: ${formatSummaryDate(createdAt)}`;
+    }
+
+    const activeRules = planEntry.ruleKeysActive || [];
+    rulesContainer.innerHTML = '';
+    rulesPlaceholder.remove();
+    if (activeRules.length) {
+      activeRules.forEach(key => {
+        const ruleDef = state.ruleDefinitionByKey.get(key);
+        const badge = document.createElement('span');
+        badge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold';
+        badge.textContent = ruleDef?.label || key;
+        if (ruleDef?.info) {
+          badge.title = ruleDef.info;
+        }
+        rulesContainer.appendChild(badge);
+      });
+    } else {
+      rulesPlaceholder.textContent = 'Keine aktiven Regeln gemeldet.';
+      rulesContainer.appendChild(rulesPlaceholder);
+    }
+  }
+
+  function formatSummaryDate(date) {
+    try {
+      return date.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+    } catch (err) {
+      return date.toISOString();
+    }
   }
 
   function startEditingPlan(planEntry) {
@@ -1384,6 +1566,7 @@ export function createPlanView() {
       slotsMap: buildSlotsMapFromArray(planEntry.slots || []),
       parking: [],
       dirty: false,
+      slotsMeta: Array.isArray(planEntry.slotsMeta) ? planEntry.slotsMeta : [],
     };
     state.editingParkingSeq = 0;
     state.dragPayload = null;
@@ -1426,8 +1609,19 @@ export function createPlanView() {
   function buildSlotsMapFromArray(slots = []) {
     const map = new Map();
     slots.forEach(slot => {
-      const key = getSlotKey(slot.class_id, slot.tag, slot.stunde);
-      map.set(key, cloneSlot(slot));
+      const zeroBased = Math.max(0, Number(slot.stunde) - 1);
+      const key = getSlotKey(slot.class_id, slot.tag, zeroBased);
+      map.set(
+        key,
+        {
+          class_id: slot.class_id,
+          tag: slot.tag,
+          stunde: zeroBased,
+          subject_id: slot.subject_id,
+          teacher_id: slot.teacher_id,
+          room_id: slot.room_id ?? null,
+        },
+      );
     });
     return map;
   }
@@ -1443,6 +1637,7 @@ export function createPlanView() {
       stunde: slot.stunde,
       subject_id: slot.subject_id,
       teacher_id: slot.teacher_id,
+      room_id: slot.room_id ?? null,
     };
   }
 
@@ -1591,29 +1786,67 @@ export function createPlanView() {
     thead.appendChild(classRow);
     table.appendChild(thead);
 
+    const slotMetaArray = Array.isArray(state.editing.slotsMeta) ? state.editing.slotsMeta : [];
+    const slotMetaByIndex = new Map();
+    slotMetaArray.forEach(meta => {
+      if (meta && typeof meta.index === 'number') {
+        slotMetaByIndex.set(meta.index, meta);
+      }
+    });
+
+    let maxStundeInPlan = 0;
+    state.editing.slotsMap.forEach(value => {
+      if (value && typeof value.stunde === 'number') {
+        maxStundeInPlan = Math.max(maxStundeInPlan, Number(value.stunde));
+      }
+    });
+    const periods = Array.from({ length: Math.max(slotMetaArray.length, STUNDEN.length, maxStundeInPlan) }, (_, idx) => idx + 1);
+
     const tbody = document.createElement('tbody');
-    STUNDEN.forEach(period => {
+    periods.forEach(period => {
       const tr = document.createElement('tr');
       const periodCell = document.createElement('th');
-      periodCell.className = 'bg-base-100 px-3 py-4 text-left text-xs font-semibold border border-base-300';
-      periodCell.textContent = `${period}. Stunde`;
+      const slotMeta = slotMetaByIndex.get(period - 1);
+      const isPause = Boolean(slotMeta?.is_pause);
+      periodCell.className = `px-3 py-4 text-left text-xs font-semibold border border-base-300 ${isPause ? 'bg-amber-50 text-amber-700' : 'bg-base-100'}`;
+      periodCell.innerHTML = '';
+      const label = document.createElement('div');
+      label.className = 'uppercase tracking-wide';
+      label.textContent = slotMeta
+        ? (isPause ? (slotMeta.label || 'Pause') : (slotMeta.label || `${period}. Stunde`))
+        : `${period}. Stunde`;
+      periodCell.appendChild(label);
+      if (slotMeta?.start || slotMeta?.end) {
+        const time = document.createElement('div');
+        time.className = 'text-[11px] opacity-70 normal-case';
+        time.textContent = [slotMeta.start, slotMeta.end].filter(Boolean).join(' – ');
+        periodCell.appendChild(time);
+      }
       tr.appendChild(periodCell);
 
       DAYS.forEach((day, dayIdx) => {
         orderedClassIds.forEach(classId => {
-          const key = getSlotKey(classId, day, period - 1);
-          const slot = state.editing.slotsMap.get(key) || null;
           const td = document.createElement('td');
-          const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/40';
-          td.className = `align-top p-1.5 border border-base-200 ${stripe} min-w-[150px]`;
-          td.dataset.classId = String(classId);
-          td.dataset.tag = day;
-          td.dataset.stunde = String(period - 1);
-          td.addEventListener('dragover', handleCellDragOver);
-          td.addEventListener('dragleave', handleCellDragLeave);
-          td.addEventListener('drop', handleCellDrop);
+          const slotKey = getSlotKey(classId, day, period - 1);
+          const slot = state.editing.slotsMap.get(slotKey) || null;
+          if (isPause) {
+            td.className = 'align-top p-2 border border-base-200 bg-amber-50/50 min-w-[150px]';
+            const pauseBlock = document.createElement('div');
+            pauseBlock.className = 'h-full min-h-[64px] flex items-center justify-center text-xs font-semibold uppercase tracking-wide text-amber-700';
+            pauseBlock.textContent = slotMeta?.label || 'Pause';
+            td.appendChild(pauseBlock);
+          } else {
+            const stripe = dayIdx % 2 === 0 ? 'bg-base-100' : 'bg-base-200/40';
+            td.className = `align-top p-1.5 border border-base-200 ${stripe} min-w-[150px]`;
+            td.dataset.classId = String(classId);
+            td.dataset.tag = day;
+            td.dataset.stunde = String(period - 1);
+            td.addEventListener('dragover', handleCellDragOver);
+            td.addEventListener('dragleave', handleCellDragLeave);
+            td.addEventListener('drop', handleCellDrop);
 
-          td.appendChild(renderEditingSlot(slot, key));
+            td.appendChild(renderEditingSlot(slot, slotKey));
+          }
           tr.appendChild(td);
         });
       });
@@ -2035,17 +2268,32 @@ export function createPlanView() {
       }
       return a.stunde - b.stunde;
     });
+    const payloadSlots = slots.map(slot => ({
+      class_id: slot.class_id,
+      tag: slot.tag,
+      stunde: Number(slot.stunde) + 1,
+      subject_id: slot.subject_id,
+      teacher_id: slot.teacher_id,
+      room_id: slot.room_id ?? null,
+    }));
     try {
       statusBar.set('Speichere bearbeiteten Plan…');
-      const detail = await updatePlanSlots(state.editing.planId, slots);
+      const detail = await updatePlanSlots(state.editing.planId, payloadSlots);
       state.editing.slotsOriginal = cloneSlotsArray(detail.slots || []);
       state.editing.slotsMap = buildSlotsMapFromArray(detail.slots || []);
       state.editing.parking = [];
       state.editing.dirty = false;
+      state.editing.slotsMeta = Array.isArray(detail.slots_meta) ? detail.slots_meta : state.editing.slotsMeta;
 
       state.generatedPlans = state.generatedPlans.map(entry =>
         entry.id === detail.id
-          ? { ...entry, slots: cloneSlotsArray(detail.slots || []), name: detail.name, comment: detail.comment }
+          ? {
+              ...entry,
+              slots: cloneSlotsArray(detail.slots || []),
+              slotsMeta: Array.isArray(detail.slots_meta) ? detail.slots_meta : entry.slotsMeta,
+              name: detail.name,
+              comment: detail.comment,
+            }
           : entry
       );
       if (state.lastPlanId === detail.id) {
@@ -2092,7 +2340,11 @@ export function createPlanView() {
       return;
     }
     try {
-      const res = await fetch(`/plans/analyze?version_id=${state.selectedVersionId}`);
+      const query = buildAccountQuery({
+        version_id: state.selectedVersionId,
+        planning_period_id: state.activePlanningPeriodId ?? undefined,
+      });
+      const res = await fetch(`/plans/analyze${query}`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text);
@@ -2107,6 +2359,8 @@ export function createPlanView() {
   }
 
   function renderAnalysis() {
+    refreshToolbar();
+    renderRunSummary();
     analysisSection.innerHTML = '';
     if (state.activeTab !== 'analysis') {
       analysisSection.classList.add('hidden');
@@ -2231,6 +2485,9 @@ export function createPlanView() {
 
   tabs.onChange(id => {
     state.activeTab = id;
+    if (state.planToolbar) {
+      state.planToolbar.setActiveTab(id);
+    }
     renderResults();
     renderAnalysis();
   });
@@ -2370,6 +2627,12 @@ export function createPlanView() {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
+  window.addEventListener('beforeunload', () => {
+    if (typeof unsubscribePlanningPeriods === 'function') {
+      unsubscribePlanningPeriods();
+    }
+  });
+
   return container;
 }
 
@@ -2506,4 +2769,46 @@ function createProgressModal() {
     close,
     isOpen,
   };
+}
+
+function buildClassWindowsMap(basisplanData, classes = []) {
+  if (!basisplanData || typeof basisplanData !== 'object') {
+    return new Map();
+  }
+  const slotCount = Array.isArray(basisplanData?.meta?.slots) && basisplanData.meta.slots.length
+    ? basisplanData.meta.slots.length
+    : 8;
+  const windows = basisplanData.windows || {};
+  const defaultEntry = normalizeWindowEntry(windows.__all, slotCount);
+  const classMap = new Map();
+  classes.forEach(cls => {
+    const classKey = cls.name || String(cls.id);
+    const specificEntry = normalizeWindowEntry(windows[classKey], slotCount);
+    const dayMap = new Map();
+    BASISPLAN_DAY_KEYS.forEach(dayKey => {
+      const tag = BASISPLAN_DAY_TO_TAG[dayKey];
+      const base = defaultEntry[dayKey] || Array(slotCount).fill(true);
+      const overrides = specificEntry[dayKey];
+      const merged = base.map((value, idx) => (typeof overrides[idx] === 'boolean' ? overrides[idx] : value));
+      dayMap.set(tag, merged);
+    });
+    classMap.set(cls.id, dayMap);
+  });
+  return classMap;
+}
+
+function normalizeWindowEntry(entry, slotCount) {
+  const allowedSource = entry && typeof entry === 'object'
+    ? entry.allowed || entry
+    : {};
+  const normalized = {};
+  BASISPLAN_DAY_KEYS.forEach(dayKey => {
+    const arr = Array.isArray(allowedSource?.[dayKey]) ? allowedSource[dayKey] : null;
+    const values = Array.from({ length: slotCount }, (_, idx) => {
+      if (arr && typeof arr[idx] === 'boolean') return arr[idx];
+      return true;
+    });
+    normalized[dayKey] = values;
+  });
+  return normalized;
 }

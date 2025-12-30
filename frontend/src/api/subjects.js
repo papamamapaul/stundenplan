@@ -1,13 +1,17 @@
+import { buildAccountQuery } from './helpers.js';
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 async function fetchSubjects() {
-  const res = await fetch('/subjects');
+  const query = buildAccountQuery();
+  const res = await fetch(`/subjects${query}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 async function createSubject(payload) {
-  const res = await fetch('/subjects', {
+  const query = buildAccountQuery();
+  const res = await fetch(`/subjects${query}`, {
     method: 'POST',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -17,7 +21,8 @@ async function createSubject(payload) {
 }
 
 async function updateSubject(id, payload) {
-  const res = await fetch(`/subjects/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/subjects/${id}${query}`, {
     method: 'PUT',
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -27,7 +32,8 @@ async function updateSubject(id, payload) {
 }
 
 async function deleteSubject(id) {
-  const res = await fetch(`/subjects/${id}`, {
+  const query = buildAccountQuery();
+  const res = await fetch(`/subjects/${id}${query}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error(await res.text());

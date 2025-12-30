@@ -4,12 +4,55 @@
 body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   margin: 0;
+  background-color: #f5f7fb;
+  color: #0f172a;
 }
 
 #app {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+.auth-mode .drawer-side,
+.auth-mode footer {
+  display: none !important;
+}
+
+.auth-mode .drawer-content {
+  width: 100% !important;
+}
+
+.auth-mode #app-content {
+  max-width: 420px;
+  padding-top: 3rem;
+  padding-bottom: 3rem;
+}
+
+.plan-view-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: stretch;
+}
+
+.plan-view-layout > * {
+  width: 100%;
+}
+
+@media (min-width: 960px) {
+  .plan-view-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    align-items: flex-start;
+    gap: 1.5rem;
+  }
+}
+
+@media (min-width: 1400px) {
+  .plan-view-layout {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(260px, 320px);
+  }
 }
 
 .view-placeholder {
@@ -25,4 +68,69 @@ body {
 
 .view-placeholder p {
   color: #64748b;
+}
+
+.teacher-badge {
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.15);
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table thead tr:first-child th:first-child {
+  border-top-left-radius: 0.75rem;
+}
+
+.table thead tr:first-child th:last-child {
+  border-top-right-radius: 0.75rem;
+}
+
+.table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 0.75rem;
+}
+
+.table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 0.75rem;
+}
+
+.plan-cell-blocked {
+  position: relative;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(107, 114, 128, 0.12),
+    rgba(107, 114, 128, 0.12) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+.plan-cell-blocked-label {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: #4b5563;
+  text-align: center;
+}
+
+.plan-cell-blocked-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.basis-window-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
 }

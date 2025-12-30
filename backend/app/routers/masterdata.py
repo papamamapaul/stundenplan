@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 from sqlalchemy import text
 
+from ..core.security import require_active_user
 from ..database import get_session
 from ..models import Class, Subject, Teacher, Room, Requirement, PlanSlot, ClassSubject
-from ..services.accounts import resolve_account
+from ..domain.accounts.service import resolve_account
 from ..services.subject_config import sync_requirements_for_subject
+from ..utils import ensure_teacher_color_column, next_teacher_color, normalize_hex_color
 
 
-router = APIRouter(prefix="", tags=["masterdata"])
+router = APIRouter(prefix="", tags=["masterdata"], dependencies=[Depends(require_active_user)])
 
 
 def _ensure_subject_alias_column(session: Session) -> None:
@@ -29,6 +31,7 @@ def list_teachers(
     session: Session = Depends(get_session),
 ) -> List[Teacher]:
     account = resolve_account(session, account_id)
+    ensure_teacher_color_column(session)
     return session.exec(select(Teacher).where(Teacher.account_id == account.id)).all()
 
 
@@ -39,8 +42,10 @@ def create_teacher(
     session: Session = Depends(get_session),
 ) -> Teacher:
     account = resolve_account(session, account_id)
+    ensure_teacher_color_column(session)
     # Mandatory: kuerzel and deputat
-    if not payload.kuerzel or (payload.deputat is None):
+    is_pool_teacher = (payload.kuerzel or "").strip().lower() == "pool"
+    if not payload.kuerzel or (payload.deputat is None and not is_pool_teacher):
         raise HTTPException(status_code=400, detail="kuerzel and deputat are required")
     # Ensure name
     if not payload.name:
@@ -49,10 +54,15 @@ def create_teacher(
             payload.name = f"{payload.first_name or ''} {payload.last_name or ''}".strip()
         else:
             payload.name = str(payload.kuerzel)
+    if is_pool_teacher:
+        payload.deputat = None
+        payload.deputat_soll = None
+    normalized_color = normalize_hex_color(payload.color) or next_teacher_color(session, account.id)
     t = Teacher(
         account_id=account.id,
         name=payload.name,
         kuerzel=payload.kuerzel,
+        color=normalized_color,
         deputat_soll=payload.deputat_soll,
         first_name=payload.first_name,
         last_name=payload.last_name,
@@ -77,6 +87,7 @@ def update_teacher(
     session: Session = Depends(get_session),
 ) -> Teacher:
     account = resolve_account(session, account_id)
+    ensure_teacher_color_column(session)
     t = session.get(Teacher, teacher_id)
     if not t:
         raise HTTPException(status_code=404, detail="teacher not found")
@@ -93,10 +104,19 @@ def update_teacher(
         t.name = f"{t.first_name or ''} {t.last_name or ''}".strip() or t.name
     if payload.kuerzel is not None:
         t.kuerzel = payload.kuerzel
+    if payload.color is not None and str(payload.color).strip():
+        normalized = normalize_hex_color(payload.color)
+        if normalized:
+            t.color = normalized
+    elif t.color is None:
+        t.color = next_teacher_color(session, account.id)
     if payload.deputat_soll is not None:
         t.deputat_soll = payload.deputat_soll
     if payload.deputat is not None:
         t.deputat = payload.deputat
+    elif (payload.kuerzel or "").strip().lower() == "pool":
+        t.deputat = None
+        t.deputat_soll = None
     if payload.work_mo is not None:
         t.work_mo = payload.work_mo
     if payload.work_di is not None:
@@ -110,8 +130,9 @@ def update_teacher(
     # Ensure name present; if empty, fallback to kuerzel
     if not t.name or not t.name.strip():
         t.name = t.kuerzel or t.name
+    is_pool_teacher = (t.kuerzel or "").strip().lower() == "pool"
     # Validate mandatory fields after update
-    if (t.kuerzel is None or str(t.kuerzel).strip() == "") or (t.deputat is None):
+    if (t.kuerzel is None or str(t.kuerzel).strip() == "") or (t.deputat is None and not is_pool_teacher):
         raise HTTPException(status_code=400, detail="kuerzel and deputat are required")
 
     session.add(t)

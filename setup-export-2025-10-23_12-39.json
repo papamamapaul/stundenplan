@@ -1,0 +1,688 @@
+{
+  "teachers": [
+    {
+      "name": "Frau Werner",
+      "kuerzel": "We",
+      "deputat_soll": null,
+      "first_name": "Frau",
+      "last_name": "Werner",
+      "deputat": 21,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "Judith Petereit",
+      "kuerzel": "Pe",
+      "deputat_soll": null,
+      "first_name": "Judith",
+      "last_name": "Petereit",
+      "deputat": 13,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "Stefanie Walker",
+      "kuerzel": "Wa",
+      "deputat_soll": null,
+      "first_name": "Stefanie",
+      "last_name": "Walker",
+      "deputat": 14,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "Frau Küenzlen",
+      "kuerzel": "Kü",
+      "deputat_soll": null,
+      "first_name": "Frau",
+      "last_name": "Küenzlen",
+      "deputat": 4,
+      "work_mo": false,
+      "work_di": true,
+      "work_mi": false,
+      "work_do": true,
+      "work_fr": false
+    },
+    {
+      "name": "Frau Martin",
+      "kuerzel": "Ma",
+      "deputat_soll": null,
+      "first_name": "Frau",
+      "last_name": "Martin",
+      "deputat": 23,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "Frau Rheinschmidt",
+      "kuerzel": "Rh",
+      "deputat_soll": null,
+      "first_name": "Frau",
+      "last_name": "Rheinschmidt",
+      "deputat": 26,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "Frau Wöhrle",
+      "kuerzel": "Wö",
+      "deputat_soll": null,
+      "first_name": "Frau",
+      "last_name": "Wöhrle",
+      "deputat": 4,
+      "work_mo": false,
+      "work_di": true,
+      "work_mi": false,
+      "work_do": false,
+      "work_fr": false
+    },
+    {
+      "name": "herr Virtuell",
+      "kuerzel": "Virt",
+      "deputat_soll": null,
+      "first_name": "herr",
+      "last_name": "Virtuell",
+      "deputat": 2,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    },
+    {
+      "name": "frau Virtuell 2",
+      "kuerzel": "Virt2",
+      "deputat_soll": null,
+      "first_name": "frau",
+      "last_name": "Virtuell 2",
+      "deputat": 2,
+      "work_mo": true,
+      "work_di": true,
+      "work_mi": true,
+      "work_do": true,
+      "work_fr": true
+    }
+  ],
+  "classes": [
+    {
+      "name": "1",
+      "homeroom_teacher": "We"
+    },
+    {
+      "name": "2",
+      "homeroom_teacher": "Ma"
+    },
+    {
+      "name": "3",
+      "homeroom_teacher": "Rh"
+    },
+    {
+      "name": "4",
+      "homeroom_teacher": "Wa"
+    }
+  ],
+  "subjects": [
+    {
+      "name": "Bewegung, Spiel und Sport",
+      "kuerzel": "BSS",
+      "color": "#84cc16",
+      "default_doppelstunde": "kann",
+      "default_nachmittag": "kann",
+      "required_room": "Sporthalle",
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Deutsch",
+      "kuerzel": "D",
+      "color": "#a855f7",
+      "default_doppelstunde": "kann",
+      "default_nachmittag": "kann",
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Förderunterricht",
+      "kuerzel": "Fö",
+      "color": "#4ade80",
+      "default_doppelstunde": "muss",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": true,
+      "alias_subject": null
+    },
+    {
+      "name": "Klassenlehrerstunde",
+      "kuerzel": "KL",
+      "color": "#eab308",
+      "default_doppelstunde": null,
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Bildende Kunst",
+      "kuerzel": "BK",
+      "color": "#ef4444",
+      "default_doppelstunde": null,
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Leseband",
+      "kuerzel": "Leba",
+      "color": "#f59e0b",
+      "default_doppelstunde": "nein",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": true,
+      "is_ag_foerder": false,
+      "alias_subject": "Deutsch"
+    },
+    {
+      "name": "Mathe",
+      "kuerzel": "M",
+      "color": "#6366f1",
+      "default_doppelstunde": "kann",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Musik",
+      "kuerzel": "Mu",
+      "color": "#d946ef",
+      "default_doppelstunde": null,
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Religion",
+      "kuerzel": "Reli",
+      "color": "#a855f7",
+      "default_doppelstunde": "muss",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Sachunterricht",
+      "kuerzel": "SU",
+      "color": "#f59e0b",
+      "default_doppelstunde": "kann",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Chor",
+      "kuerzel": "Cho",
+      "color": "#a3e635",
+      "default_doppelstunde": null,
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": true,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Englisch",
+      "kuerzel": "E",
+      "color": "#8b5cf6",
+      "default_doppelstunde": "nein",
+      "default_nachmittag": null,
+      "required_room": null,
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    },
+    {
+      "name": "Schwimmen",
+      "kuerzel": "Schw",
+      "color": "#14b8a6",
+      "default_doppelstunde": "kann",
+      "default_nachmittag": "kann",
+      "required_room": "Schwimmhalle",
+      "is_bandfach": false,
+      "is_ag_foerder": false,
+      "alias_subject": null
+    }
+  ],
+  "rooms": [
+    {
+      "name": "Sporthalle",
+      "type": "Sporthalle",
+      "capacity": 30,
+      "is_classroom": false
+    },
+    {
+      "name": "Schwimmhalle",
+      "type": "Schwimmhalle",
+      "capacity": 30,
+      "is_classroom": false
+    }
+  ],
+  "curriculum": [
+    {
+      "class_name": "1",
+      "subject_name": "Deutsch",
+      "wochenstunden": 6,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Förderunterricht",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Klassenlehrerstunde",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Bildende Kunst",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Leseband",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Mathe",
+      "wochenstunden": 5,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Musik",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Religion",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Sachunterricht",
+      "wochenstunden": 3,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Bewegung, Spiel und Sport",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Deutsch",
+      "wochenstunden": 6,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Förderunterricht",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Klassenlehrerstunde",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Bildende Kunst",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Leseband",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Mathe",
+      "wochenstunden": 6,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Musik",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Religion",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Sachunterricht",
+      "wochenstunden": 3,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Bewegung, Spiel und Sport",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Chor",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Deutsch",
+      "wochenstunden": 5,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Englisch",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Förderunterricht",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Klassenlehrerstunde",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Bildende Kunst",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Leseband",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Mathe",
+      "wochenstunden": 5,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Musik",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Religion",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "3",
+      "subject_name": "Sachunterricht",
+      "wochenstunden": 3,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Deutsch",
+      "wochenstunden": 5,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Englisch",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Förderunterricht",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Klassenlehrerstunde",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Bildende Kunst",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Leseband",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Mathe",
+      "wochenstunden": 6,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Musik",
+      "wochenstunden": 1,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Religion",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Sachunterricht",
+      "wochenstunden": 3,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Schwimmen",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Bewegung, Spiel und Sport",
+      "wochenstunden": 2,
+      "participation": "curriculum",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "2",
+      "subject_name": "Chor",
+      "wochenstunden": 1,
+      "participation": "ag",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "1",
+      "subject_name": "Chor",
+      "wochenstunden": 1,
+      "participation": "ag",
+      "doppelstunde": null,
+      "nachmittag": null
+    },
+    {
+      "class_name": "4",
+      "subject_name": "Chor",
+      "wochenstunden": 1,
+      "participation": "ag",
+      "doppelstunde": null,
+      "nachmittag": null
+    }
+  ],
+  "rule_profiles": [
+    {
+      "keine_hohlstunden": true,
+      "nachmittag_regel": true,
+      "doppelstundenregel": true,
+      "leseband_parallel": true,
+      "gleichverteilung": true,
+      "mittagsschule_vormittag": true,
+      "W_GAPS_INSIDE": 3,
+      "W_EINZEL_KANN": 5,
+      "keine_hohlstunden_hard": false,
+      "name": "Default",
+      "stundenbegrenzung": true,
+      "klassenlehrerstunde_fix": true,
+      "einzelstunde_nur_rand": true,
+      "kuba_parallel": true,
+      "W_GAPS_START": 2,
+      "W_EVEN_DIST": 1
+    }
+  ]
+}

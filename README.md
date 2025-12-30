@@ -28,6 +28,15 @@ uvicorn backend.app.main:app --reload
 - Frontend: `http://127.0.0.1:8000/ui/index.html`
 - Standard-Datenbank: `backend.db` (SQLite, verwaltet über SQLModel/Alembic)
 
+### Authentifizierung
+
+- Beim ersten Start wird automatisch ein Administrator-Konto angelegt. Standardwerte können über Umgebungsvariablen überschrieben werden:
+  - `STUNDENPLAN_ADMIN_EMAIL` (default: `admin@example.com`)
+  - `STUNDENPLAN_ADMIN_PASSWORD` (default: `admin`)
+  - `STUNDENPLAN_JWT_SECRET` (default: `change-me`, bitte in Produktion anpassen)
+- Melde dich im Frontend über `#/login` mit den Admin-Zugangsdaten an. Über die neue Ansicht **Benutzerverwaltung** lassen sich weitere Lehrkräfte-Konten erstellen. Nur Administratoren dürfen Benutzer anlegen; ein Self-Signup existiert bewusst nicht.
+- Alle API-Requests erwarten ab sofort ein Bearer-Token (`Authorization: Bearer <token>`), das über `/auth/login` ausgegeben wird. Ein gültiger Token kann jederzeit mit `/auth/me` überprüft werden.
+
 ---
 
 ## Entwicklungs-Workflow
